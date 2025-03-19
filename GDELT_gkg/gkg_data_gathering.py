@@ -14,7 +14,7 @@ END_DATE = datetime(2021, 1, 3)  # End date is inclusive
 LOCATION_FILTER = "Delhi"
 
 # Output settings
-OUTPUT_DIR = r"C:\Users\nikun\Desktop\MLPR\Project\ML_trial\GDELT_gkg\gkg_datasets"
+OUTPUT_DIR = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\GDELT_gkg\gkg_datasets"
 OUTPUT_FILENAME = "delhi_gkg_data_2021_jan1_3.csv"
 
 # Request timeout (seconds)

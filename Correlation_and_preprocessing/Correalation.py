@@ -6,11 +6,11 @@ from scipy.stats import pearsonr
 import os
 
 # Create output directory for saving visualizations
-output_dir = r'C:\Users\nikun\Desktop\MLPR\Project\ML_trial\weather_energy_dataset\correlation_analysis_results'
+output_dir = r'C:\Users\nikun\Desktop\MLPR\Project\AI-Energy-Load\weather_energy_dataset\correlation_analysis_results'
 os.makedirs(output_dir, exist_ok=True)
 
 # Define file paths and check if they exist
-weather_path = r'C:\Users\nikun\Desktop\MLPR\Project\ML_trial\weather_energy_dataset\weather_energy_15min.csv'
+weather_path = r'C:\Users\nikun\Desktop\MLPR\Project\AI-Energy-Load\weather_energy_dataset\weather_energy_15min.csv'
 gdelt_path = r'C:\Users\nikun\Desktop\ML_News_Energy_Model\GDELT_gkg\gkg_datasets\processed_gkg_15min_intervals.csv'
 
 print("Checking if files exist...")

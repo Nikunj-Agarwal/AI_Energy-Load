@@ -1,20 +1,17 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
+from datetime import datetime
 
 #==============================
 # CONFIGURATION VARIABLES
 #==============================
 
 # File paths
-INPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\ML_trial\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
-OUTPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\ML_trial\GDELT_gkg\gkg_datasets\processed_gkg_15min_intervals.csv"
-VISUALIZATION_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\ML_trial\GDELT_gkg\gkg_graphs\theme_distribution.png"
+INPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
+OUTPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\AI_Energy-Load\GDELT_gkg\gkg_datasets\processed_gkg_parsed_data.csv"
 
 # Processing options
 SAMPLE_SIZE = 10000  # Set to None for full dataset processing
-TIME_WINDOW_MINUTES = 15  # Interval size in minutes
 
 # Theme categories and keywords
 theme_categories = {
@@ -31,17 +28,6 @@ theme_categories = {
 
 # Tone metrics to extract
 TONE_METRICS = ['tone', 'positive', 'negative', 'polarity', 'activity', 'self_ref']
-
-# Aggregation metrics to calculate for each column type
-# You can add/remove metrics here (e.g., 'median', 'std', etc.)
-THEME_AGGREGATIONS = ['sum', 'mean', 'max']
-TONE_AGGREGATIONS = ['mean', 'min', 'max']
-COUNT_AGGREGATIONS = ['sum', 'mean', 'max']
-AMOUNT_AGGREGATIONS = ['mean', 'max']
-
-# Visualization settings
-VIZ_FIGSIZE = (12, 6)
-VIZ_ROTATION = 45
 
 #==============================
 # HELPER FUNCTIONS
@@ -60,13 +46,6 @@ def convert_date(date_str):
         return datetime(year, month, day, hour, minute, second)
     except:
         return None
-
-def bin_to_time_window(dt):
-    """Convert datetime to specified time interval"""
-    if dt is None:
-        return None
-    minute = (dt.minute // TIME_WINDOW_MINUTES) * TIME_WINDOW_MINUTES
-    return datetime(dt.year, dt.month, dt.day, dt.hour, minute, 0)
 
 def parse_themes(theme_str):
     """Extract themes from V2Themes column"""
@@ -182,10 +161,9 @@ if SAMPLE_SIZE:
     df = df.head(sample_size)
     print(f"Using sample of {sample_size} rows")
 
-# Convert DATE to datetime and create time windows
-print("Converting dates and creating time windows...")
+# Convert DATE to datetime
+print("Converting dates...")
 df['datetime'] = df['DATE'].apply(convert_date)
-df['time_window'] = df['datetime'].apply(bin_to_time_window)
 
 # Process themes
 print("Processing themes...")
@@ -215,8 +193,8 @@ df['avg_amount'] = df['parsed_amounts'].apply(lambda x: np.mean(x) if x else 0)
 df['max_amount'] = df['parsed_amounts'].apply(lambda x: max(x) if x else 0)
 df['amount_count'] = df['parsed_amounts'].apply(lambda x: len(x) if x else 0)
 
-# Print some statistics before aggregation
-print("\nTheme distribution in raw data:")
+# Print some statistics about the parsed data
+print("\nTheme distribution in data:")
 for category in theme_categories:
     count = df[f'theme_{category}'].sum()
     print(f"{category}: {count}")
@@ -226,59 +204,13 @@ print(f"Average tone: {df['tone_tone'].mean()}")
 print(f"Most positive: {df['tone_positive'].max()}")
 print(f"Most negative: {df['tone_negative'].max()}")
 
-# Group by time windows
-print(f"\nAggregating by {TIME_WINDOW_MINUTES}-minute intervals...")
-time_window_groups = df.groupby('time_window')
+# Clean up intermediate columns if desired
+columns_to_drop = ['parsed_themes', 'theme_categories', 'parsed_tone', 
+                   'parsed_counts', 'parsed_amounts']
 
-# Set up aggregation functions
-agg_functions = {}
-
-# Event count
-agg_functions['GKGRECORDID'] = ['count']
-
-# Theme aggregations
-for category in theme_categories:
-    col = f'theme_{category}'
-    agg_functions[col] = THEME_AGGREGATIONS
-
-# Tone aggregations
-for metric in TONE_METRICS:
-    col = f'tone_{metric}'
-    agg_functions[col] = TONE_AGGREGATIONS
-
-# Count and amount aggregations
-agg_functions['entity_count'] = COUNT_AGGREGATIONS
-agg_functions['entity_variety'] = COUNT_AGGREGATIONS
-agg_functions['avg_amount'] = AMOUNT_AGGREGATIONS
-agg_functions['max_amount'] = AMOUNT_AGGREGATIONS
-agg_functions['amount_count'] = ['sum', 'mean']
-
-# Create aggregated dataframe
-df_agg = time_window_groups.agg(agg_functions)
-
-# Flatten the multi-level column names
-df_agg.columns = ['_'.join(col).strip() for col in df_agg.columns.values]
-df_agg = df_agg.reset_index()
-
-# Print information about the aggregated dataset
-print(f"\nAggregated data shape: {df_agg.shape}")
-print("\nSample of aggregated data:")
-print(df_agg.head(2))
-
-# Print some statistics
-print("\nTime windows with most events:")
-most_events = df_agg.nlargest(5, 'GKGRECORDID_count')
-print(most_events[['time_window', 'GKGRECORDID_count']])
+# Uncomment to remove intermediate processing columns
+# df = df.drop(columns=columns_to_drop)
 
 # Save the processed data
-df_agg.to_csv(OUTPUT_FILE_PATH, index=False)
+df.to_csv(OUTPUT_FILE_PATH, index=False)
 print(f"\nProcessed data saved to {OUTPUT_FILE_PATH}")
-
-# Optional: Create a quick visualization
-plt.figure(figsize=VIZ_FIGSIZE)
-plt.bar(range(len(theme_categories)), [df_agg[f'theme_{cat}_sum'].mean() for cat in theme_categories])
-plt.xticks(range(len(theme_categories)), theme_categories, rotation=VIZ_ROTATION)
-plt.title(f'Average Theme Presence in {TIME_WINDOW_MINUTES}-minute Windows')
-plt.tight_layout()
-plt.savefig(VISUALIZATION_PATH)
-print("Theme distribution visualization saved")

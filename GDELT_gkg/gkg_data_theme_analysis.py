@@ -4,7 +4,7 @@ from collections import Counter
 import re
 
 # Path to the dataset
-INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\Project\ML_trial\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
+INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\Project\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
 
 def extract_and_analyze_themes(file_path):
     """Extract and analyze all themes in the dataset"""

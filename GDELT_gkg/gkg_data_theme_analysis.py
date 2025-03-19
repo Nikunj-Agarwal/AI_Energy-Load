@@ -3,8 +3,8 @@ import matplotlib.pyplot as plt
 from collections import Counter
 import re
 
-# Path to the dataset
-INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\Project\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
+# Update this line
+INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
 
 def extract_and_analyze_themes(file_path):
     """Extract and analyze all themes in the dataset"""
@@ -96,6 +96,9 @@ def extract_and_analyze_themes(file_path):
 
 def identify_energy_related_themes(theme_counter):
     """Identify themes that might affect energy load"""
+    if not theme_counter:
+        return None
+        
     # Keywords related to energy consumption
     energy_keywords = [
         'POWER', 'ENERGY', 'ELECTRIC', 'GRID', 
@@ -114,6 +117,15 @@ def identify_energy_related_themes(theme_counter):
     # Sort by count
     potential_energy_themes.sort(key=lambda x: x[1], reverse=True)
     
+    # Print the results
+    print("\nPotential energy-related themes:")
+    if potential_energy_themes:
+        for theme, count in potential_energy_themes:
+            print(f"{theme}: {count}")
+    else:
+        print("No energy-related themes found.")
+        
+    return potential_energy_themes
 
 if __name__ == "__main__":
     theme_counter = extract_and_analyze_themes(INPUT_FILE)

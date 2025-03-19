@@ -111,11 +111,12 @@ def save_aggregated_data(df, output_path):
     df.to_csv(output_path, index=False)
 
 def main():
-    # Updated path to match your current project structure
-    data_dir = Path(r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\weather_energy_dataset")
+    # Fix: Point to the directory containing data files, not to a file
+    data_dir = Path(r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\Weather_Energy")
     
-    # Rest of your code remains the same
+    # Path to the specific file
     specific_file = data_dir / "weather_energy.csv"
+    
     if os.path.exists(specific_file):
         print(f"Processing file: {specific_file}")
         

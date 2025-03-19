@@ -7,8 +7,8 @@ from datetime import datetime
 #==============================
 
 # File paths
-INPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
-OUTPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\Project\AI_Energy-Load\GDELT_gkg\gkg_datasets\processed_gkg_parsed_data.csv"
+INPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
+OUTPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\GDELT_gkg\gkg_datasets\processed_gkg_parsed_data.csv"
 
 # Processing options
 SAMPLE_SIZE = 10000  # Set to None for full dataset processing

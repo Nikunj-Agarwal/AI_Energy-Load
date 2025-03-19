@@ -21,6 +21,9 @@ OUTPUT_FILENAME = "delhi_gkg_data_2021_jan1_3.csv"
 TIMEOUT = 30
 # ===================================
 
+# Update this line
+INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
+
 def get_gdelt_gkg_urls(start_date, end_date):
     """Generate URLs for GDELT GKG files for a date range."""
     urls = []

@@ -1,0 +1,54 @@
+# Ignore output directories
+OUTPUT_DIR/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore virtual environment
+venv/
+.env/
+*.env
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+
+# Ignore temporary files created by editors
+*.swp
+*.swo
+*.bak
+*.orig
+
+# Ignore compiled files
+*.so
+*.dll
+*.exe
+*.out
+*.class
+
+# Ignore large data files (if applicable)
+*.csv
+*.tsv
+*.json
+*.xml
+*.zip
+*.tar
+*.gz
+*.pickle
+*.pkl
+
+# Allow specific files in OUTPUT_DIR if needed
+!OUTPUT_DIR/important_file.csv

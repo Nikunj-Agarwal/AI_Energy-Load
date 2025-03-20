@@ -6,16 +6,15 @@ import seaborn as sns
 from datetime import datetime
 import os
 
-# Input/output paths
-INPUT_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\processed_data\processed_gkg_parsed_data.csv"
-OUTPUT_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\aggregated_data\aggregated_gkg_15min.csv"
-FIGURES_DIR = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\figures"
+# Import configuration - ADDED IMPORT FROM CONFIG FILE
+from config import (
+    PATHS, setup_and_verify, test_directory_writing as config_test_directory_writing
+)
 
-# Create directories if they don't exist
-for dir_path in [os.path.dirname(OUTPUT_PATH), FIGURES_DIR]:
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-        print(f"Created directory: {dir_path}")
+# Use paths from config instead of hardcoded paths - IMPROVED PATH USAGE
+INPUT_PATH = os.path.join(PATHS["PROCESSED_DIR"], "processed_gkg_parsed_data.csv")
+OUTPUT_PATH = os.path.join(PATHS["AGGREGATED_DIR"], "aggregated_gkg_15min.csv")
+FIGURES_DIR = PATHS["FIGURES_DIR"]
 
 # Define key theme categories most likely to affect energy load
 # Updated to match categories used in sparsing.py
@@ -355,9 +354,79 @@ def generate_time_series_plots(df):
     plt.savefig(os.path.join(FIGURES_DIR, 'temporal_patterns.png'), dpi=300)
     plt.close()
 
+def test_directory_writing():
+    """Test writing to all required directories before processing"""
+    print("Testing directory writing permissions...")
+    
+    # IMPROVED DIRECTORY TESTING - More comprehensive tests
+    directories = [
+        os.path.dirname(INPUT_PATH),  # Added input directory
+        os.path.dirname(OUTPUT_PATH),
+        FIGURES_DIR
+    ]
+    
+    all_passed = True
+    for directory in directories:
+        if not os.path.exists(directory):
+            try:
+                os.makedirs(directory)
+                print(f"Created directory: {directory}")
+            except Exception as e:
+                print(f"ERROR: Could not create directory {directory}: {e}")
+                all_passed = False
+                continue
+        
+        # Test writing a small file
+        test_file = os.path.join(directory, "test_write.txt")
+        try:
+            with open(test_file, 'w') as f:
+                f.write(f"Test write at {datetime.now()}")
+            os.remove(test_file)
+            print(f"✓ Successfully wrote to {directory}")
+        except Exception as e:
+            print(f"✗ ERROR: Could not write to {directory}: {e}")
+            all_passed = False
+    
+    # Test writing a DataFrame to output directory
+    try:
+        test_df = pd.DataFrame({'test': [1, 2, 3]})
+        test_csv_path = os.path.join(os.path.dirname(OUTPUT_PATH), "test_dataframe.csv")
+        test_df.to_csv(test_csv_path, index=False)
+        os.remove(test_csv_path)
+        print(f"✓ Successfully wrote test DataFrame to {os.path.dirname(OUTPUT_PATH)}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write test DataFrame: {e}")
+        all_passed = False
+            
+    # Also test writing a small test plot to ensure matplotlib can save figures
+    if os.path.exists(FIGURES_DIR):
+        try:
+            test_fig_path = os.path.join(FIGURES_DIR, "test_plot.png")
+            plt.figure(figsize=(2, 2))
+            plt.plot([1, 2, 3], [1, 4, 9])
+            plt.savefig(test_fig_path)
+            plt.close()
+            os.remove(test_fig_path)
+            print(f"✓ Successfully created test plot in {FIGURES_DIR}")
+        except Exception as e:
+            print(f"✗ ERROR: Could not create test plot: {e}")
+            all_passed = False
+    
+    return all_passed
+
 def main():
     """Main function to execute the data aggregation pipeline"""
     print(f"=== GDELT GKG Data Aggregation - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+    
+    # ADDED - First verify all directories exist using config functions
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        return
+    
+    # Test directory writing before proceeding
+    if not test_directory_writing():
+        print("ERROR: Directory writing test failed. Aborting processing.")
+        return
     
     # Load the parsed data
     print(f"Loading data from {INPUT_PATH}...")
@@ -390,6 +459,8 @@ def main():
     
     # Save the aggregated data
     print(f"Saving aggregated data to {OUTPUT_PATH}...")
+    # IMPROVED - Ensure output directory exists before saving
+    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     complete_df.to_csv(OUTPUT_PATH, index=False)
     print(f"Data aggregation complete. Created {len(complete_df)} 15-minute intervals with {complete_df.shape[1]} features.")
     

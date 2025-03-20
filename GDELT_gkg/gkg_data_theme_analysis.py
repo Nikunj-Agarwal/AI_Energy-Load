@@ -27,17 +27,23 @@ from datetime import datetime
 import glob
 from tqdm import tqdm
 
+# IMPROVED: Import from config file
+from config import (
+    PATHS, THEME_CATEGORIES as CONFIG_THEME_CATEGORIES, 
+    setup_and_verify, test_directory_writing as config_test_directory_writing
+)
+
 #============================================================
 # CONFIGURATION
 #============================================================
-# Input/Output Paths
-INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\GDELT_gkg\gkg_datasets\delhi_gkg_data_2021_jan1_3.csv"
-BATCH_DIR = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\raw_data\batch_outputs"
-PREPROCESSED_FILE = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\processed_data\processed_gkg_parsed_data.csv"
-MERGED_OUTPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\processed_data\theme_analysis_merged.csv"
+# Input/Output Paths - IMPROVED: Use paths from config
+INPUT_FILE = os.path.join(PATHS["RAW_DATA_DIR"], "delhi_gkg_data_2021_jan1_3.csv")
+BATCH_DIR = PATHS["BATCH_DIR"]
+PREPROCESSED_FILE = os.path.join(PATHS["PROCESSED_DIR"], "processed_gkg_parsed_data.csv")
+MERGED_OUTPUT_FILE = os.path.join(PATHS["PROCESSED_DIR"], "theme_analysis_merged.csv")
 
 # Create a better organized output structure
-BASE_OUTPUT_DIR = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\analysis_results"
+BASE_OUTPUT_DIR = PATHS["ANALYSIS_DIR"]  # IMPROVED: Use path from config
 # The actual output directory will be created with a timestamp
 
 # Processing options
@@ -45,18 +51,8 @@ PROCESS_BATCH_FILES = True   # Set to True to process all files in BATCH_DIR
 USE_PREPROCESSED = False     # Set to True to use already preprocessed data
 SAMPLE_SIZE = None           # Set to a number to limit processing (for testing)
 
-# Theme Categories - Must align with categories in gkg_data_sparsing.py
-THEME_CATEGORIES = {
-    'Political': ['ELECTION', 'GOVERN', 'POLIT', 'DEMO', 'LEG', 'VOTE', 'PARLIAMENT', 'PRESIDENT', 'MINISTER'],
-    'Economic': ['ECON', 'MARKET', 'TRADE', 'BUSINESS', 'FINANC', 'TAX', 'INVEST', 'GDP', 'INFLATION'],
-    'Religious': ['RELIG', 'MUSLIM', 'HINDU', 'SIKH', 'TEMPLE', 'CHURCH', 'MOSQUE', 'FAITH', 'GOD'],
-    'Energy': ['ENERGY', 'POWER', 'ELECTRIC', 'OIL', 'GAS', 'COAL', 'FUEL', 'RENEWABLE', 'GRID'],
-    'Infrastructure': ['INFRA', 'TRANSPORT', 'CONSTRUCT', 'BUILDING', 'ROAD', 'HIGHWAY', 'RAIL', 'AIRPORT'],
-    'Health': ['HEALTH', 'COVID', 'DISEASE', 'PANDEMIC', 'HOSPITAL', 'MEDIC', 'VACCINE', 'DRUG'],
-    'Social': ['SOCIAL', 'PROTEST', 'RALLY', 'CELEBR', 'FESTIVAL', 'COMMUNITY', 'SOCIETY', 'PUBLIC', 'CITIZEN'],
-    'Environment': ['ENV', 'CLIMATE', 'WEATHER', 'POLLUT', 'WATER', 'GREEN', 'ECOLOGY', 'TEMPERATURE'],
-    'Education': ['EDU', 'SCHOOL', 'UNIVERSITY', 'STUDENT', 'LEARNING', 'COLLEGE', 'TEACHER', 'PROFESSOR']
-}
+# Theme Categories - IMPROVED: Use categories from config
+THEME_CATEGORIES = CONFIG_THEME_CATEGORIES
 
 # Energy-Related Keywords - Terms that might directly impact energy consumption
 ENERGY_KEYWORDS = [
@@ -766,6 +762,10 @@ def process_file(file_path):
 
 def create_organized_output_dirs():
     """Create an organized directory structure for outputs with timestamp"""
+    # IMPROVED - Ensure base directory exists
+    if not os.path.exists(BASE_OUTPUT_DIR):
+        os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
+        
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(BASE_OUTPUT_DIR, f"analysis_{timestamp}")
     
@@ -811,19 +811,126 @@ def create_organized_output_dirs():
     
     return dirs
 
+def test_output_directories(output_dirs):
+    """Test writing to each directory in the output structure"""
+    print("Testing output directory access...")
+    
+    all_passed = True
+    
+    # Test main directories
+    for dir_name, dir_path in [
+        ("root", output_dirs["root"]),
+        ("data", output_dirs["data"]),
+        ("reports", output_dirs["reports"])
+    ]:
+        test_file = os.path.join(dir_path, "test_write.txt")
+        try:
+            with open(test_file, 'w') as f:
+                f.write(f"Test write at {datetime.now()}")
+            os.remove(test_file)
+            print(f"✓ Successfully wrote to {dir_name} directory: {dir_path}")
+        except Exception as e:
+            print(f"✗ ERROR: Could not write to {dir_name} directory {dir_path}: {e}")
+            all_passed = False
+    
+    # Test visualization directories
+    for viz_type, viz_path in output_dirs["visualizations"].items():
+        test_file = os.path.join(viz_path, "test_write.txt")
+        try:
+            with open(test_file, 'w') as f:
+                f.write(f"Test write at {datetime.now()}")
+            os.remove(test_file)
+            print(f"✓ Successfully wrote to {viz_type} visualization directory: {viz_path}")
+        except Exception as e:
+            print(f"✗ ERROR: Could not write to {viz_type} visualization directory {viz_path}: {e}")
+            all_passed = False
+    
+    # Test matplotlib plot
+    try:
+        test_plot_path = os.path.join(output_dirs["visualizations"]["main"], "test_plot.png")
+        plt.figure(figsize=(2, 2))
+        plt.plot([1, 2, 3], [1, 4, 9])
+        plt.savefig(test_plot_path)
+        plt.close()
+        os.remove(test_plot_path)
+        print(f"✓ Successfully created test plot")
+    except Exception as e:
+        print(f"✗ ERROR: Could not create test plot: {e}")
+        all_passed = False
+    
+    # IMPROVED: Test DataFrame write
+    try:
+        test_df = pd.DataFrame({'test': [1, 2, 3]})
+        test_csv_path = os.path.join(output_dirs["data"], "test_dataframe.csv")
+        test_df.to_csv(test_csv_path, index=False)
+        os.remove(test_csv_path)
+        print(f"✓ Successfully wrote test DataFrame to {output_dirs['data']}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write test DataFrame: {e}")
+        all_passed = False
+    
+    return all_passed
+
+def test_input_directories():
+    """Test reading from input directories and files"""
+    print("Testing input directory access...")
+    
+    all_passed = True
+    
+    # Test batch directory
+    if not os.path.exists(BATCH_DIR):
+        print(f"✗ WARNING: Batch directory {BATCH_DIR} does not exist")
+        all_passed = False
+    else:
+        print(f"✓ Batch directory {BATCH_DIR} exists")
+    
+    # Test preprocessed file directory
+    preprocessed_dir = os.path.dirname(PREPROCESSED_FILE)
+    if not os.path.exists(preprocessed_dir):
+        print(f"✗ WARNING: Preprocessed data directory {preprocessed_dir} does not exist")
+    else:
+        print(f"✓ Preprocessed data directory {preprocessed_dir} exists")
+    
+    # If using preprocessed data, check if the file exists
+    if USE_PREPROCESSED:
+        if not os.path.exists(PREPROCESSED_FILE):
+            print(f"✗ ERROR: Preprocessed file {PREPROCESSED_FILE} does not exist")
+            all_passed = False
+        else:
+            print(f"✓ Preprocessed file {PREPROCESSED_FILE} exists")
+    
+    return all_passed
+
 def main(input_file=INPUT_FILE):
     """Main execution function"""
     print(f"=== GDELT GKG Theme Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     
+    # IMPROVED: First verify all directories exist using config functions
+    if not setup_and_verify():
+        print("ERROR: Global directory setup verification failed. Aborting processing.")
+        return
+    
+    # IMPROVED: Test input directories
+    if not test_input_directories():
+        print("WARNING: Some input directories or files are missing. Analysis may be incomplete.")
+        # Continue execution but with warning
+    
     # Create organized directory structure
     output_dirs = create_organized_output_dirs()
     print(f"Analysis outputs will be saved to: {output_dirs['root']}")
+    
+    # Test writing to all directories
+    if not test_output_directories(output_dirs):
+        print("ERROR: Output directory tests failed. Cannot proceed with analysis.")
+        return
     
     # Determine data source
     if PROCESS_BATCH_FILES:
         print("Mode: Processing batch files")
         df = load_batch_files(BATCH_DIR)
         if df is not None:
+            # Ensure the directory exists - IMPROVED
+            os.makedirs(os.path.dirname(MERGED_OUTPUT_FILE), exist_ok=True)
             # Optionally save the merged file
             df.to_csv(MERGED_OUTPUT_FILE, index=False)
             print(f"Saved merged data to {MERGED_OUTPUT_FILE}")
@@ -850,11 +957,26 @@ def main(input_file=INPUT_FILE):
     
     # Create visualizations with the new directory structure
     viz_paths['top_themes'] = plot_top_themes(theme_counter, output_dirs=output_dirs)
-    viz_paths['category_pie'], viz_paths['category_bar'] = plot_theme_categories(category_counts, output_dirs=output_dirs)
-    viz_paths['energy_themes'] = plot_energy_themes(energy_themes, output_dirs=output_dirs)
+    
+    # FIXED: Make plot_theme_categories return the paths
+    category_pie_path = os.path.join(output_dirs["visualizations"]["categories"], 'theme_categories_pie.png')
+    category_bar_path = os.path.join(output_dirs["visualizations"]["categories"], 'theme_categories_bar.png')
+    plot_theme_categories(category_counts, output_dir=output_dirs["visualizations"]["categories"])
+    viz_paths['category_pie'] = category_pie_path
+    viz_paths['category_bar'] = category_bar_path
+    
+    # FIXED: Make plot_energy_themes return the path
+    energy_path = os.path.join(output_dirs["visualizations"]["energy"], 'energy_related_themes.png')
+    plot_energy_themes(energy_themes, output_dir=output_dirs["visualizations"]["energy"])
+    viz_paths['energy_themes'] = energy_path
     
     if period_theme_counts:
-        viz_paths['temporal_heatmap'], viz_paths['temporal_bar'] = plot_temporal_patterns(period_theme_counts, output_dirs=output_dirs)
+        # FIXED: Make plot_temporal_patterns return the paths
+        temporal_heatmap_path = os.path.join(output_dirs["visualizations"]["temporal"], 'temporal_theme_patterns.png')
+        temporal_bar_path = os.path.join(output_dirs["visualizations"]["temporal"], 'temporal_theme_barchart.png')
+        plot_temporal_patterns(period_theme_counts, output_dir=output_dirs["visualizations"]["temporal"])
+        viz_paths['temporal_heatmap'] = temporal_heatmap_path
+        viz_paths['temporal_bar'] = temporal_bar_path
     
     # Save results to CSV in the data directory
     save_results_to_csv(theme_counter, category_counts, energy_themes, period_theme_counts, output_dir=output_dirs["data"])

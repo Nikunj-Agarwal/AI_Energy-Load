@@ -5,9 +5,16 @@ import io
 from datetime import datetime, timedelta
 import os
 import concurrent.futures
-from tqdm import tqdm  # pip install tqdm if not installed
+from tqdm import tqdm
 import time
 import hashlib
+import re
+
+# Import our centralized configuration - IMPROVED IMPORTS
+from config import (
+    PATHS, LOCATION_FILTER, TIMEOUT, MAX_WORKERS, START_DATE as CONFIG_START_DATE, 
+    END_DATE as CONFIG_END_DATE, setup_and_verify, test_directory_writing
+)
 
 """
 GDELT GKG Data Gathering Script
@@ -23,45 +30,23 @@ Usage:
 - To run all data in one go, uncomment the 'main()' call at the end
 - To run in batches, uncomment the 'process_in_batches()' call
 - To resume interrupted batch processing, uncomment the 'process_in_batches_with_resume()' call
-
-Configuration:
-- Adjust the START_DATE, END_DATE, and LOCATION_FILTER as needed
-- Set OUTPUT_DIR and OUTPUT_FILENAME to control where data is saved
-- Adjust max_workers in the ThreadPoolExecutor for more/less parallelism
-
-Notes:
-- Downloaded data is cached to avoid re-downloading
-- Cache directory should be added to .gitignore if using version control
 """
 
-# ===== CONFIGURATION PARAMETERS =====
-# Date range to fetch data for
-START_DATE = datetime(2021, 1, 1)
-END_DATE = datetime(2024, 12, 12)  # End date is inclusive
+# Get paths from config
+RAW_DATA_DIR = PATHS["RAW_DATA_DIR"]
+BATCH_DIR = PATHS["BATCH_DIR"]
+CACHE_DIR = PATHS["CACHE_DIR"]
+OUTPUT_DIR = PATHS["BASE_DIR"]
 
-# Location filter
-LOCATION_FILTER = "Delhi"
+# Default filename for single file processing
+OUTPUT_FILENAME = "delhi_gkg_data_full.csv"
 
-# Output settings
-OUTPUT_DIR = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR"
-OUTPUT_FILENAME = "delhi_gkg_data_2021_jan1_3.csv"
-
-# Add this line with your other output settings
-BATCH_OUTPUT_DIR = os.path.join(OUTPUT_DIR, "raw_data", "batch_outputs")
-
-# Request timeout (seconds)
-TIMEOUT = 30
-# ===================================
-
-# Update this line
-INPUT_FILE = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\raw_data\delhi_gkg_data_2021_jan1_3.csv"
-
-CACHE_DIR = os.path.join(OUTPUT_DIR, "raw_data", "cache")
+# Initialize global variables (will be set during batch processing)
+START_DATE = CONFIG_START_DATE
+END_DATE = CONFIG_END_DATE
 
 def get_cache_path(url):
     """Generate a cache file path for a URL"""
-    if not os.path.exists(CACHE_DIR):
-        os.makedirs(CACHE_DIR)
     url_hash = hashlib.md5(url.encode()).hexdigest()
     return os.path.join(CACHE_DIR, f"{url_hash}.pkl")
 
@@ -134,9 +119,22 @@ def download_and_filter_gkg(url, timestamp, location_filter):
                 'SocialImageEmbeds', 'SocialVideoEmbeds', 'Quotations', 'AllNames', 'Amounts', 
                 'TranslationInfo', 'Extras']
         
-        # Read the CSV file
-        with z.open(filename) as f:
-            df = pd.read_csv(f, sep='\t', header=None, names=cols, dtype=str)
+        # Read the CSV file - MODIFIED FOR ENCODING ISSUES
+        try:
+            # First try with errors='replace' to handle encoding issues
+            with z.open(filename) as f:
+                df = pd.read_csv(f, sep='\t', header=None, names=cols, 
+                                dtype=str, encoding='utf-8', errors='replace')
+        except:
+            # If that fails, try with latin-1 encoding which can handle any byte value
+            with z.open(filename) as f:
+                content = f.read()
+                # Use latin-1 encoding which can read any byte sequence
+                text_content = content.decode('latin-1')
+                # Create a file-like object from the decoded content
+                from io import StringIO
+                string_data = StringIO(text_content)
+                df = pd.read_csv(string_data, sep='\t', header=None, names=cols, dtype=str)
         
         # Filter for entries mentioning the location in Locations or V2Locations columns
         location_mask = (df['Locations'].str.contains(location_filter, na=False, case=False) | 
@@ -155,11 +153,56 @@ def download_and_filter_gkg(url, timestamp, location_filter):
         print(f"Error processing {url}: {e}")
         return None
 
+def test_data_directories():
+    """Test write access to data directories with a test DataFrame"""
+    print("\nTesting data directories with DataFrame writes...")
+    
+    test_df = pd.DataFrame({'test': [1, 2, 3]})
+    all_passed = True
+    
+    # Test writing to batch directory
+    batch_test_file = os.path.join(BATCH_DIR, "test_data.csv")
+    try:
+        test_df.to_csv(batch_test_file, index=False)
+        os.remove(batch_test_file)
+        print(f"✓ Successfully wrote DataFrame to {BATCH_DIR}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write DataFrame to {BATCH_DIR}: {e}")
+        all_passed = False
+    
+    # Test writing to cache directory
+    cache_test_file = os.path.join(CACHE_DIR, "test_data.pkl")
+    try:
+        test_df.to_pickle(cache_test_file)
+        os.remove(cache_test_file)
+        print(f"✓ Successfully wrote DataFrame to {CACHE_DIR}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write DataFrame to {CACHE_DIR}: {e}")
+        all_passed = False
+    
+    # Test writing to raw data directory
+    raw_test_file = os.path.join(RAW_DATA_DIR, "test_data.csv")
+    try:
+        test_df.to_csv(raw_test_file, index=False)
+        os.remove(raw_test_file)
+        print(f"✓ Successfully wrote DataFrame to {RAW_DATA_DIR}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write DataFrame to {RAW_DATA_DIR}: {e}")
+        all_passed = False
+    
+    return all_passed
+
 def main():
     """Process GDELT GKG data for the configured date range and location filter"""
-    # Create directory to store the data if it doesn't exist
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    # First verify directory structure and access using config's function
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        return
+    
+    # Additional test for data directories with DataFrame operations
+    if not test_data_directories():
+        print("ERROR: Data directory test failed. Aborting processing.")
+        return
     
     # Get URLs for the date range
     urls = get_gdelt_gkg_urls(START_DATE, END_DATE)
@@ -171,7 +214,7 @@ def main():
     start_time = datetime.now()
     
     # Use ThreadPoolExecutor for parallel downloads
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Create a list to track futures
         future_to_url = {executor.submit(download_and_filter_gkg, url, timestamp, LOCATION_FILTER): 
                          (url, timestamp) for url, timestamp in urls}
@@ -195,8 +238,18 @@ def main():
     if filtered_data:
         combined_df = pd.concat(filtered_data, ignore_index=True)
         
-        # Save to CSV
-        output_path = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
+        # Save to CSV - using consistent path logic
+        if 'OUTPUT_PATH' in globals():
+            # Use explicit path set by batch processing
+            output_path = OUTPUT_PATH
+        else:
+            # Use default path
+            output_path = os.path.join(RAW_DATA_DIR, OUTPUT_FILENAME)
+        
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Save the data
         combined_df.to_csv(output_path, index=False)
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved {len(combined_df)} entries to {output_path}")
@@ -205,79 +258,17 @@ def main():
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] No data found for {LOCATION_FILTER} in the specified date range.")
         print(f"Processing completed in {elapsed_time}")
 
-# Process data in 3-month chunks
-def process_in_batches():
-    """Process GDELT GKG data in 3-month batches"""
-    # Create batch output directory if it doesn't exist
-    if not os.path.exists(BATCH_OUTPUT_DIR):
-        os.makedirs(BATCH_OUTPUT_DIR)
-        
-    start = datetime(2021, 1, 1)
-    end_date = datetime(2024, 12, 12)
-    
-    while start < end_date:
-        # Calculate batch end (3 months later)
-        batch_end = start + timedelta(days=90)
-        # Ensure we don't go past the final end date
-        if batch_end > end_date:
-            batch_end = end_date
-            
-        print(f"\n\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Processing batch: {start.strftime('%Y-%m-%d')} to {batch_end.strftime('%Y-%m-%d')}")
-        
-        # Update the output filename for this batch - save in the batch directory
-        global OUTPUT_FILENAME
-        batch_filename = f"delhi_gkg_data_{start.strftime('%Y%m%d')}_to_{batch_end.strftime('%Y%m%d')}.csv"
-        OUTPUT_FILENAME = os.path.join("batch_outputs", batch_filename)
-        
-        # Set the date range for this batch
-        global START_DATE, END_DATE
-        START_DATE = start
-        END_DATE = batch_end
-        
-        # Run the main processing
-        main()
-        
-        # Move to next batch
-        start = batch_end + timedelta(days=1)
-
-def find_last_completed_batch():
-    """Find the latest date that has been processed based on existing files.
-    
-    Used by the resumable batch processing to determine where to start from.
-    Returns None if no completed batches are found.
-    """
-    if not os.path.exists(BATCH_OUTPUT_DIR):
-        return None
-        
-    batch_files = [f for f in os.listdir(BATCH_OUTPUT_DIR) if f.endswith('.csv')]
-    if not batch_files:
-        return None
-        
-    # Extract end dates from filenames using regex
-    import re
-    end_dates = []
-    for filename in batch_files:
-        match = re.search(r'_to_(\d{8})\.csv', filename)
-        if match:
-            date_str = match.group(1)
-            try:
-                end_date = datetime.strptime(date_str, '%Y%m%d')
-                end_dates.append(end_date)
-            except ValueError:
-                continue
-    
-    if not end_dates:
-        print("Warning: Found batch files but could not extract dates from filenames.")
-        return None
-        
-    # Return the latest end date found
-    return max(end_dates)
-
 def process_in_batches_with_resume():
     """Process GDELT GKG data in 3-month batches, resuming from the last processed batch"""
-    # Create batch output directory if it doesn't exist
-    if not os.path.exists(BATCH_OUTPUT_DIR):
-        os.makedirs(BATCH_OUTPUT_DIR)
+    # First verify directory structure and access using config's function
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        return
+    
+    # Additional test for data directories with DataFrame operations
+    if not test_data_directories():
+        print("ERROR: Data directory test failed. Aborting processing.")
+        return
     
     # Find the last completed batch
     last_completed_date = find_last_completed_batch()
@@ -304,21 +295,117 @@ def process_in_batches_with_resume():
             
         print(f"\n\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Processing batch: {start.strftime('%Y-%m-%d')} to {batch_end.strftime('%Y-%m-%d')}")
         
-        # Update the output filename for this batch - save in the batch directory
-        global OUTPUT_FILENAME
+        # Update the output filename for this batch
         batch_filename = f"delhi_gkg_data_{start.strftime('%Y%m%d')}_to_{batch_end.strftime('%Y%m%d')}.csv"
-        OUTPUT_FILENAME = os.path.join("batch_outputs", batch_filename)
+        
+        # Set the full output path explicitly
+        global OUTPUT_PATH, START_DATE, END_DATE
+        OUTPUT_PATH = os.path.join(BATCH_DIR, batch_filename)
         
         # Set the date range for this batch
-        global START_DATE, END_DATE
         START_DATE = start
         END_DATE = batch_end
+        
+        # Test for specific batch file write access
+        test_batch_file = os.path.join(BATCH_DIR, f"test_{start.strftime('%Y%m%d')}.csv")
+        try:
+            pd.DataFrame({'test': [1]}).to_csv(test_batch_file, index=False)
+            os.remove(test_batch_file)
+            print(f"✓ Successfully verified write access for this batch")
+        except Exception as e:
+            print(f"✗ ERROR: Could not write test batch file: {e}")
+            print("Aborting batch processing due to write access issues")
+            break
         
         # Run the main processing
         main()
         
         # Move to next batch
         start = batch_end + timedelta(days=1)
+
+def process_in_batches():
+    """Process GDELT GKG data in 3-month batches"""
+    # First verify directory structure and access using config's function
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        return
+    
+    # Additional test for data directories with DataFrame operations
+    if not test_data_directories():
+        print("ERROR: Data directory test failed. Aborting processing.")
+        return
+    
+    start = datetime(2021, 1, 1)
+    end_date = datetime(2024, 12, 12)
+    
+    while start < end_date:
+        # Calculate batch end (3 months later)
+        batch_end = start + timedelta(days=90)
+        # Ensure we don't go past the final end date
+        if batch_end > end_date:
+            batch_end = end_date
+            
+        print(f"\n\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Processing batch: {start.strftime('%Y-%m-%d')} to {batch_end.strftime('%Y-%m-%d')}")
+        
+        # Update the output filename for this batch
+        batch_filename = f"delhi_gkg_data_{start.strftime('%Y%m%d')}_to_{batch_end.strftime('%Y%m%d')}.csv"
+        
+        # Set the full output path explicitly
+        global OUTPUT_PATH, START_DATE, END_DATE
+        OUTPUT_PATH = os.path.join(BATCH_DIR, batch_filename)
+        
+        # Set the date range for this batch
+        START_DATE = start
+        END_DATE = batch_end
+        
+        # Test for specific batch file write access
+        test_batch_file = os.path.join(BATCH_DIR, f"test_{start.strftime('%Y%m%d')}.csv")
+        try:
+            pd.DataFrame({'test': [1]}).to_csv(test_batch_file, index=False)
+            os.remove(test_batch_file)
+            print(f"✓ Successfully verified write access for this batch")
+        except Exception as e:
+            print(f"✗ ERROR: Could not write test batch file: {e}")
+            print("Aborting batch processing due to write access issues")
+            break
+        
+        # Run the main processing
+        main()
+        
+        # Move to next batch
+        start = batch_end + timedelta(days=1)
+
+def find_last_completed_batch():
+    """Find the latest date that has been processed based on existing files.
+    
+    Used by the resumable batch processing to determine where to start from.
+    Returns None if no completed batches are found.
+    """
+    if not os.path.exists(BATCH_DIR):
+        return None
+        
+    batch_files = [f for f in os.listdir(BATCH_DIR) if f.endswith('.csv')]
+    if not batch_files:
+        return None
+        
+    # Extract end dates from filenames using regex
+    end_dates = []
+    for filename in batch_files:
+        match = re.search(r'_to_(\d{8})\.csv', filename)
+        if match:
+            date_str = match.group(1)
+            try:
+                end_date = datetime.strptime(date_str, '%Y%m%d')
+                end_dates.append(end_date)
+            except ValueError:
+                continue
+    
+    if not end_dates:
+        print("Warning: Found batch files but could not extract dates from filenames.")
+        return None
+        
+    # Return the latest end date found
+    return max(end_dates)
 
 def cleanup_cache(delete_all=False):
     """Clean up cache files
@@ -346,8 +433,21 @@ def cleanup_cache(delete_all=False):
         print(f"Removed {removed} empty cache files")
 
 if __name__ == "__main__":
+    print(f"=== GDELT GKG Data Gathering - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+    
+    # Verify directory structure at startup using setup_and_verify from config
+    if not setup_and_verify():
+        print("ERROR: Critical directory issues found. Aborting.")
+        exit(1)
+    
+    # Run test_data_directories to verify DataFrame operations
+    if not test_data_directories():
+        print("ERROR: Data directory operations test failed. Aborting.")
+        exit(1)
+    
+    # Start the processing
     process_in_batches_with_resume()
-    # process_in_batches()  # Comment this out when using the resume version
-    # main()  # Comment this out when using batch processing
-    # cleanup_cache()  # Uncomment to clean up empty cache files
-    # cleanup_cache(True)  # Uncomment to delete all cache files
+    
+    # Clean up cache AFTER successful completion
+    print("Processing complete! Cleaning up cache files...")
+    cleanup_cache(delete_all=True)

@@ -5,34 +5,29 @@ import os
 import glob
 from tqdm import tqdm
 
+# ADDED - Import from config file
+from config import (
+    PATHS, THEME_CATEGORIES, setup_and_verify, test_directory_writing as config_test_directory_writing
+)
+
 #==============================
 # CONFIGURATION VARIABLES
 #==============================
 
-# File paths
-INPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\raw_data\delhi_gkg_data_2021_jan1_3.csv"
-OUTPUT_FILE_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\processed_data\processed_gkg_parsed_data.csv"
+# File paths - UPDATED TO USE CONFIG
+INPUT_FILE_PATH = os.path.join(PATHS["RAW_DATA_DIR"], "delhi_gkg_data_2021_jan1_3.csv")
+OUTPUT_FILE_PATH = os.path.join(PATHS["PROCESSED_DIR"], "processed_gkg_parsed_data.csv")
 
-# Batch processing settings
-BATCH_DIR = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\raw_data\batch_outputs"
-MERGED_OUTPUT_PATH = r"C:\Users\nikun\Desktop\MLPR\AI_Energy-Load\OUTPUT_DIR\processed_data\merged_delhi_gkg_data.csv"
+# Batch processing settings - UPDATED TO USE CONFIG
+BATCH_DIR = PATHS["BATCH_DIR"]
+MERGED_OUTPUT_PATH = os.path.join(PATHS["PROCESSED_DIR"], "merged_delhi_gkg_data.csv")
 PROCESS_BATCHES = True  # Set to True to process batch files instead of single file
 
 # Processing options
 SAMPLE_SIZE = None  # Set to None for full dataset processing
 
-# Theme categories and keywords
-theme_categories = {
-    'Health': ['health', 'medic', 'disease', 'hospital', 'covid', 'vaccine', 'pandemic'],
-    'Political': ['government', 'election', 'politic', 'policy', 'minister', 'president', 'parliament'],
-    'Economic': ['econom', 'market', 'trade', 'business', 'financ', 'tax', 'invest'],
-    'Education': ['education', 'school', 'university', 'student', 'learning', 'college'],
-    'Infrastructure': ['infrastructure', 'construction', 'building', 'transport', 'road', 'highway'],
-    'Social': ['social', 'community', 'society', 'people', 'public', 'citizen'],
-    'Religious': ['religion', 'religious', 'temple', 'church', 'mosque', 'faith', 'god'],
-    'Environment': ['environment', 'climate', 'pollution', 'water', 'ecology', 'green'],
-    'Energy': ['energy', 'power', 'electricity', 'fuel', 'oil', 'gas', 'coal']
-}
+# Theme categories and keywords - UPDATED TO USE CONFIG
+theme_categories = THEME_CATEGORIES
 
 # Tone metrics to extract
 TONE_METRICS = ['tone', 'positive', 'negative', 'polarity', 'activity', 'self_ref']
@@ -259,8 +254,75 @@ def process_dataframe(df):
 # MAIN PROCESSING
 #==============================
 
+def test_directory_access():
+    """Test if we can write to all required directories"""
+    print("Testing directory access and file writing permissions...")
+    
+    test_dirs = [
+        os.path.dirname(INPUT_FILE_PATH),  # ADDED input directory
+        os.path.dirname(OUTPUT_FILE_PATH),
+        os.path.dirname(MERGED_OUTPUT_PATH),
+        BATCH_DIR
+    ]
+    
+    all_passed = True
+    for directory in test_dirs:
+        if not os.path.exists(directory):
+            try:
+                os.makedirs(directory)
+                print(f"Created directory: {directory}")
+            except Exception as e:
+                print(f"ERROR: Could not create directory {directory}: {e}")
+                all_passed = False
+                continue
+        
+        test_file = os.path.join(directory, "test_write.txt")
+        try:
+            with open(test_file, 'w') as f:
+                f.write(f"Test write at {datetime.now()}")
+            os.remove(test_file)
+            print(f"✓ Successfully wrote to {directory}")
+        except Exception as e:
+            print(f"✗ ERROR: Could not write to {directory}: {e}")
+            all_passed = False
+    
+    # ADDED - Test DataFrame writing to output directories
+    test_df = pd.DataFrame({'test': [1, 2, 3]})
+    
+    # Test output directory
+    try:
+        test_csv = os.path.join(os.path.dirname(OUTPUT_FILE_PATH), "test_dataframe.csv")
+        test_df.to_csv(test_csv, index=False)
+        os.remove(test_csv)
+        print(f"✓ Successfully wrote DataFrame to {os.path.dirname(OUTPUT_FILE_PATH)}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write DataFrame to {os.path.dirname(OUTPUT_FILE_PATH)}: {e}")
+        all_passed = False
+    
+    # Test merged output directory
+    try:
+        test_csv = os.path.join(os.path.dirname(MERGED_OUTPUT_PATH), "test_dataframe.csv")
+        test_df.to_csv(test_csv, index=False)
+        os.remove(test_csv)
+        print(f"✓ Successfully wrote DataFrame to {os.path.dirname(MERGED_OUTPUT_PATH)}")
+    except Exception as e:
+        print(f"✗ ERROR: Could not write DataFrame to {os.path.dirname(MERGED_OUTPUT_PATH)}: {e}")
+        all_passed = False
+    
+    return all_passed
+
 def process_single_file(input_path=INPUT_FILE_PATH, output_path=OUTPUT_FILE_PATH):
     """Process a single GKG data file"""
+    # ADDED - First verify directory structure using config function
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        return
+    
+    # Test directory access
+    if not test_directory_access():
+        print("ERROR: Directory access test failed. Aborting processing.")
+        return
+        
     # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_path)
     if not os.path.exists(output_dir):
@@ -288,6 +350,16 @@ def process_single_file(input_path=INPUT_FILE_PATH, output_path=OUTPUT_FILE_PATH
 
 def process_batch_files():
     """Merge and process all batch files"""
+    # ADDED - First verify directory structure using config function
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        return
+    
+    # Test directory access
+    if not test_directory_access():
+        print("ERROR: Directory access test failed. Aborting batch processing.")
+        return
+        
     # First merge all batch files
     merged_df = merge_batch_files()
     
@@ -305,6 +377,11 @@ def process_batch_files():
 # Main execution
 if __name__ == "__main__":
     print(f"GDELT GKG Data Sparsing - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # ADDED - First verify directory structure using config function
+    if not setup_and_verify():
+        print("ERROR: Directory setup verification failed. Aborting processing.")
+        exit(1)
     
     if PROCESS_BATCHES:
         print("Mode: Processing all batch files")

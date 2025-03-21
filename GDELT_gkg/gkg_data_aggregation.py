@@ -21,17 +21,45 @@ FIGURES_DIR = PATHS["FIGURES_DIR"]
 ENERGY_THEMES = ['Energy', 'Environment', 'Infrastructure', 'Social', 'Health', 
                 'Political', 'Economic']  # Added more relevant themes
 
+def validate_input_data(df, required_columns=None):
+    """Validate that input data has required columns for aggregation"""
+    if required_columns is None:
+        required_columns = ['datetime', 'GKGRECORDID'] + [f'theme_{theme}' for theme in ENERGY_THEMES]
+    
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        # Try case-insensitive matching for theme columns
+        theme_cols = [col for col in missing_columns if col.startswith('theme_')]
+        for theme_col in theme_cols[:]:  # Use copy to avoid modification during iteration
+            # Try different capitalizations
+            theme_name = theme_col.replace('theme_', '')
+            alternatives = [
+                f'theme_{theme_name.lower()}',
+                f'theme_{theme_name.upper()}',
+                f'theme_{theme_name.capitalize()}'
+            ]
+            for alt in alternatives:
+                if alt in df.columns:
+                    print(f"Found alternative column {alt} for {theme_col}")
+                    # Create the expected column
+                    df[theme_col] = df[alt]
+                    missing_columns.remove(theme_col)
+                    break
+        
+        if missing_columns:
+            print(f"WARNING: Input data missing required columns: {missing_columns}")
+            return False
+    
+    return True
+
 def aggregate_gkg_to_15min(df):
-    """
-    Aggregate GKG data into 15-minute intervals, focusing on energy-relevant features
-    while minimizing feature count.
-    """
+    """Aggregate GKG data into 15-minute intervals with improved error handling"""
     print(f"Starting aggregation of {len(df)} records...")
     
-    # Check if the datetime column exists and is in the correct format
-    if 'datetime' not in df.columns:
-        print("Error: 'datetime' column not found. Aggregation cannot proceed.")
-        return None
+    # Validate input data first
+    if not validate_input_data(df):
+        print("WARNING: Input data validation failed. Results may be incomplete.")
     
     # Ensure datetime is in the correct format
     df['datetime'] = pd.to_datetime(df['datetime'])
@@ -40,36 +68,40 @@ def aggregate_gkg_to_15min(df):
     df['time_bucket'] = df['datetime'].dt.floor('15min')
     
     # 1. BASIC AGGREGATION
-    # -------------------
     print("Performing basic aggregation...")
     
-    # Define aggregation dictionary focusing on the most important features
+    # Define aggregation dictionary
     agg_dict = {
-        # Count of articles in each interval
         'GKGRECORDID': 'count',
-        
-        # All theme categories (sum and max to capture prevalence and intensity)
         **{f'theme_{cat}': ['sum', 'max', 'mean'] for cat in ENERGY_THEMES},
-        
-        # Tone metrics (focus on average and extremes)
         'tone_tone': ['mean', 'min', 'max', 'std'],
-        'tone_negative': ['max', 'mean'],  # Capture negative sentiment
-        'tone_positive': ['max', 'mean'],  # Capture positive sentiment
-        'tone_polarity': ['mean', 'max'],  # Added polarity metrics
-        'tone_activity': ['mean', 'max'],  # Added activity metrics
-        
-        # Entity metrics (more comprehensive)
-        'entity_count': ['sum', 'mean'],   # Total entities mentioned
-        'entity_variety': ['sum', 'max'],  # Added entity variety
-        
-        # Amount metrics (from sparsing)
-        'avg_amount': ['mean', 'max'],     # Average amounts in articles
-        'max_amount': ['max', 'mean'],     # Maximum amounts
-        'amount_count': ['sum']            # Count of amounts mentioned
+        'tone_negative': ['max', 'mean'],
+        'tone_positive': ['max', 'mean'],
+        'tone_polarity': ['mean', 'max'],
+        'tone_activity': ['mean', 'max'],
+        'entity_count': ['sum', 'mean'],
+        'entity_variety': ['sum', 'max'] if 'entity_variety' in df.columns else [],
+        'avg_amount': ['mean', 'max'] if 'avg_amount' in df.columns else [],
+        'max_amount': ['max', 'mean'] if 'max_amount' in df.columns else [],
+        'amount_count': ['sum'] if 'amount_count' in df.columns else []
     }
     
+    # Filter to only include columns that exist in the dataframe
+    agg_dict = {k: v for k, v in agg_dict.items() if isinstance(v, list) and k in df.columns}
+    
     # Group by time bucket and aggregate
-    agg_df = df.groupby('time_bucket').agg(agg_dict)
+    try:
+        agg_df = df.groupby('time_bucket').agg(agg_dict)
+    except Exception as e:
+        print(f"ERROR during aggregation: {e}")
+        # Try with minimal set of columns
+        minimal_agg = {
+            'GKGRECORDID': 'count',
+            'tone_tone': ['mean'] if 'tone_tone' in df.columns else []
+        }
+        minimal_agg = {k: v for k, v in minimal_agg.items() if k in df.columns}
+        print("Retrying with minimal aggregation...")
+        agg_df = df.groupby('time_bucket').agg(minimal_agg)
     
     # Flatten column multi-index
     agg_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in agg_df.columns]
@@ -78,26 +110,68 @@ def aggregate_gkg_to_15min(df):
     agg_df.rename(columns={'GKGRECORDID_count': 'article_count'}, inplace=True)
     
     # 2. FEATURE ENGINEERING
-    # ---------------------
     print("Engineering features...")
     
-    # Create composite features that combine themes with sentiment
-    agg_df['energy_crisis_indicator'] = agg_df['theme_Energy_sum'] * agg_df['tone_negative_max'] 
-    agg_df['weather_alert_indicator'] = agg_df['theme_Environment_sum'] * np.abs(agg_df['tone_tone_min'])
-    agg_df['social_event_indicator'] = agg_df['theme_Social_sum'] * agg_df['article_count'] / 100
-    agg_df['infrastructure_stress'] = agg_df['theme_Infrastructure_sum'] * agg_df['tone_negative_max']
-    agg_df['political_crisis_indicator'] = agg_df['theme_Political_sum'] * agg_df['tone_negative_max']
-    agg_df['economic_impact_indicator'] = agg_df['theme_Economic_sum'] * agg_df['tone_volatility']
+    # FIXED: Calculate tone volatility BEFORE using it
+    agg_df['tone_volatility'] = agg_df['tone_tone_max'] - agg_df['tone_tone_min'] \
+                              if all(col in agg_df.columns for col in ['tone_tone_max', 'tone_tone_min']) \
+                              else 0
     
-    # Calculate tone volatility (max - min) as a single metric instead of std
-    agg_df['tone_volatility'] = agg_df['tone_tone_max'] - agg_df['tone_tone_min']
+    # Create composite features - with existence checks
+    feature_definitions = [
+        ('energy_crisis_indicator', 
+         lambda df: df['theme_Energy_sum'] * df['tone_negative_max'] 
+         if all(col in df.columns for col in ['theme_Energy_sum', 'tone_negative_max']) else 0),
+         
+        ('weather_alert_indicator', 
+         lambda df: df['theme_Environment_sum'] * np.abs(df['tone_tone_min'])
+         if all(col in df.columns for col in ['theme_Environment_sum', 'tone_tone_min']) else 0),
+         
+        ('social_event_indicator', 
+         lambda df: df['theme_Social_sum'] * df['article_count'] / 100
+         if all(col in df.columns for col in ['theme_Social_sum', 'article_count']) else 0),
+         
+        ('infrastructure_stress', 
+         lambda df: df['theme_Infrastructure_sum'] * df['tone_negative_max']
+         if all(col in df.columns for col in ['theme_Infrastructure_sum', 'tone_negative_max']) else 0),
+         
+        ('political_crisis_indicator', 
+         lambda df: df['theme_Political_sum'] * df['tone_negative_max']
+         if all(col in df.columns for col in ['theme_Political_sum', 'tone_negative_max']) else 0),
+         
+        ('economic_impact_indicator', 
+         lambda df: df['theme_Economic_sum'] * df['tone_volatility']
+         if all(col in df.columns for col in ['theme_Economic_sum', 'tone_volatility']) else 0)
+    ]
     
-    # Article volume change detection
-    agg_df = agg_df.reset_index()
-    agg_df['prev_article_count'] = agg_df['article_count'].shift(1).fillna(0)
-    agg_df['article_count_change'] = agg_df['article_count'] - agg_df['prev_article_count']
-    agg_df['article_volume_spike'] = (agg_df['article_count'] > 
-                                    agg_df['article_count'].rolling(window=12).mean() * 1.5).astype(int)
+    # Apply each feature definition with try/except
+    for feature_name, feature_func in feature_definitions:
+        try:
+            agg_df[feature_name] = feature_func(agg_df)
+        except Exception as e:
+            print(f"WARNING: Could not create feature {feature_name}: {e}")
+            agg_df[feature_name] = 0
+    
+    # Article volume change detection - with error handling
+    try:
+        agg_df = agg_df.reset_index()
+        agg_df['prev_article_count'] = agg_df['article_count'].shift(1).fillna(0)
+        agg_df['article_count_change'] = agg_df['article_count'] - agg_df['prev_article_count']
+        
+        # Use try/except for rolling window operations which can fail with short time series
+        try:
+            agg_df['article_volume_spike'] = (agg_df['article_count'] > 
+                                            agg_df['article_count'].rolling(window=12).mean() * 1.5).astype(int)
+        except Exception as e:
+            print(f"WARNING: Could not calculate article_volume_spike: {e}")
+            agg_df['article_volume_spike'] = 0
+            
+    except Exception as e:
+        print(f"WARNING: Could not calculate article volume changes: {e}")
+        # Create default columns
+        agg_df = agg_df.reset_index()
+        agg_df['article_count_change'] = 0
+        agg_df['article_volume_spike'] = 0
     
     # 3. TIME FEATURES
     # --------------
@@ -415,63 +489,90 @@ def test_directory_writing():
     return all_passed
 
 def main():
-    """Main function to execute the data aggregation pipeline"""
+    """Main function with better error handling and recovery"""
     print(f"=== GDELT GKG Data Aggregation - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     
-    # ADDED - First verify all directories exist using config functions
-    if not setup_and_verify():
-        print("ERROR: Directory setup verification failed. Aborting processing.")
+    # Command line argument parsing
+    import argparse
+    parser = argparse.ArgumentParser(description="GDELT GKG Data Aggregation")
+    parser.add_argument("--input", help="Input file path")
+    parser.add_argument("--output", help="Output file path")
+    parser.add_argument("--no-plots", action="store_true", help="Skip generating plots")
+    parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
+    args = parser.parse_args()
+    
+    # Override paths if specified
+    input_path = args.input or INPUT_PATH
+    output_path = args.output or OUTPUT_PATH
+    
+    # Directory checks
+    if not setup_and_verify() or not test_directory_writing():
+        print("ERROR: Directory checks failed. Aborting processing.")
         return
     
-    # Test directory writing before proceeding
-    if not test_directory_writing():
-        print("ERROR: Directory writing test failed. Aborting processing.")
-        return
-    
-    # Load the parsed data
-    print(f"Loading data from {INPUT_PATH}...")
+    # Load data with encoding handling
+    print(f"Loading data from {input_path}...")
     try:
-        df = pd.read_csv(INPUT_PATH)
-        if 'datetime' in df.columns:
-            df['datetime'] = pd.to_datetime(df['datetime'])
-        print(f"Loaded {len(df)} records with {df.shape[1]} columns")
+        # Try utf-8 with error replacement
+        df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
     except Exception as e:
-        print(f"Error loading data: {e}")
-        return
+        print(f"Error with utf-8 encoding, trying latin-1: {e}")
+        try:
+            # Fall back to latin-1
+            df = pd.read_csv(input_path, encoding='latin-1')
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            return
     
-    # Perform aggregation
-    print("Aggregating data to 15-minute intervals...")
-    agg_df = aggregate_gkg_to_15min(df)
-    
-    if agg_df is None:
-        print("Aggregation failed. Check the logs for errors.")
-        return
+    # Process in chunks if it's a large file
+    if len(df) > 1000000:  # For very large files
+        print("Large dataset detected, processing in chunks...")
+        chunk_size = 500000
+        chunks = [df[i:i+chunk_size] for i in range(0, len(df), chunk_size)]
+        
+        results = []
+        for i, chunk in enumerate(chunks):
+            print(f"Processing chunk {i+1}/{len(chunks)}...")
+            chunk_agg = aggregate_gkg_to_15min(chunk)
+            if chunk_agg is not None:
+                results.append(chunk_agg)
+        
+        if not results:
+            print("All chunks failed processing. Aborting.")
+            return
+            
+        # Combine chunks and handle duplicates
+        agg_df = pd.concat(results)
+        agg_df = agg_df.groupby('time_bucket').first().reset_index()
+    else:
+        # Standard processing for smaller files
+        agg_df = aggregate_gkg_to_15min(df)
+        
+        if agg_df is None:
+            print("Aggregation failed. Check the logs for errors.")
+            return
     
     # Handle missing intervals
-    print("Ensuring all 15-minute intervals are present...")
-    complete_df = handle_missing_intervals(agg_df)
+    start_date = pd.to_datetime(args.start_date) if args.start_date else None
+    end_date = pd.to_datetime(args.end_date) if args.end_date else None
+    complete_df = handle_missing_intervals(agg_df, start_date=start_date, end_date=end_date)
     
-    # Analyze features
-    corr_matrix = analyze_features(complete_df)
-    
-    # Generate exploratory visualizations
-    generate_time_series_plots(complete_df)
+    # Only generate visualizations if not disabled
+    if not args.no_plots:
+        # Analyze features
+        analyze_features(complete_df)
+        
+        # Generate exploratory visualizations
+        generate_time_series_plots(complete_df)
     
     # Save the aggregated data
-    print(f"Saving aggregated data to {OUTPUT_PATH}...")
-    # IMPROVED - Ensure output directory exists before saving
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    complete_df.to_csv(OUTPUT_PATH, index=False)
+    print(f"Saving aggregated data to {output_path}...")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    complete_df.to_csv(output_path, index=False)
+    
+    # Print success message
     print(f"Data aggregation complete. Created {len(complete_df)} 15-minute intervals with {complete_df.shape[1]} features.")
-    
-    # Print summary statistics
-    print("\nSummary of key aggregated metrics:")
-    print(complete_df[['article_count', 'tone_tone_mean', 'energy_crisis_indicator', 
-                     'weather_alert_indicator', 'social_event_indicator']].describe().T)
-    
-    print(f"\nOutput file saved to: {OUTPUT_PATH}")
-    print(f"Visualization files saved to: {FIGURES_DIR}")
-    print(f"=== Processing completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     
     return complete_df
 

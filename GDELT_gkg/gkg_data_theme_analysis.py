@@ -133,6 +133,80 @@ def load_batch_files(batch_dir=BATCH_DIR, limit=None):
     
     return merged_df
 
+def load_batch_files_in_chunks(batch_dir=BATCH_DIR, chunk_size=50000):
+    """Load and process batch files in memory-efficient chunks"""
+    print(f"Looking for batch files in {batch_dir}...")
+    batch_files = glob.glob(os.path.join(batch_dir, "*.csv"))
+    
+    if not batch_files:
+        print("No batch files found!")
+        return None
+    
+    print(f"Found {len(batch_files)} batch files. Will process in chunks of {chunk_size} rows.")
+    return batch_files  # Just return the file paths, not the loaded data
+
+def process_in_chunks(file_paths, chunk_size=50000):
+    """Process multiple files in chunks to reduce memory usage"""
+    # Initialize counters to accumulate results across chunks
+    all_themes_counter = Counter()
+    all_category_counts = {category: 0 for category in THEME_CATEGORIES}
+    energy_themes_counter = Counter()
+    period_theme_counts = {}
+    
+    total_rows_processed = 0
+    
+    # Process each file in chunks
+    for file_idx, file_path in enumerate(file_paths):
+        print(f"\nProcessing file {file_idx+1}/{len(file_paths)}: {os.path.basename(file_path)}")
+        
+        try:
+            # Process this file in chunks
+            for chunk_idx, chunk in enumerate(pd.read_csv(file_path, chunksize=chunk_size)):
+                print(f"  Processing chunk {chunk_idx+1} with {len(chunk)} rows")
+                
+                # Get theme column for this chunk
+                theme_column = get_theme_column(chunk)
+                if theme_column is None:
+                    continue
+                
+                # Extract themes from this chunk
+                chunk_theme_counter = extract_themes(chunk, theme_column)
+                all_themes_counter.update(chunk_theme_counter)
+                
+                # Update category counts from this chunk
+                chunk_category_counts = categorize_themes(chunk_theme_counter)
+                for category, count in chunk_category_counts.items():
+                    all_category_counts[category] += count
+                
+                # Update energy themes from this chunk
+                chunk_energy_themes = identify_energy_related_themes(chunk_theme_counter)
+                if chunk_energy_themes:
+                    for theme, count in chunk_energy_themes:
+                        energy_themes_counter[theme] += count
+                
+                # Analyze temporal patterns for this chunk
+                chunk_period_counts = analyze_temporal_patterns(chunk)
+                if chunk_period_counts:
+                    # Merge with overall period counts
+                    for period, theme_dict in chunk_period_counts.items():
+                        if period not in period_theme_counts:
+                            period_theme_counts[period] = theme_dict
+                        else:
+                            for theme, count in theme_dict.items():
+                                period_theme_counts[period][theme] = period_theme_counts[period].get(theme, 0) + count
+                
+                total_rows_processed += len(chunk)
+                print(f"    Total rows processed so far: {total_rows_processed}")
+                
+        except Exception as e:
+            print(f"Error processing file {os.path.basename(file_path)}: {e}")
+            print("Continuing with next file...")
+    
+    # Convert energy themes counter to list format expected by visualization functions
+    energy_themes_list = [(theme, count) for theme, count in energy_themes_counter.most_common()]
+    
+    return all_themes_counter, all_category_counts, energy_themes_list, period_theme_counts
+
 #============================================================
 # THEME EXTRACTION & ANALYSIS
 #============================================================
@@ -332,8 +406,10 @@ def plot_top_themes(theme_counter, n=20, output_dirs=None):
     
     return output_path  # Return the path for use in reports
 
-def plot_theme_categories(category_counts, output_dir=OUTPUT_DIR):
+def plot_theme_categories(category_counts, output_dir=None):
     """Plot theme categories as a pie chart and bar chart"""
+    if output_dir is None:
+        output_dir = BASE_OUTPUT_DIR
     output_dir = ensure_output_dir(output_dir)
     
     # Sort categories by count
@@ -397,12 +473,14 @@ def plot_theme_categories(category_counts, output_dir=OUTPUT_DIR):
     print(f"Saved bar chart to {output_path}")
     plt.close()
 
-def plot_energy_themes(energy_themes, output_dir=OUTPUT_DIR):
+def plot_energy_themes(energy_themes, output_dir=None):
     """Plot energy-related themes"""
     if not energy_themes:
         print("No energy-related themes to plot")
         return
     
+    if output_dir is None:
+        output_dir = BASE_OUTPUT_DIR
     output_dir = ensure_output_dir(output_dir)
     
     # Use only top 15 for better visualization
@@ -431,12 +509,14 @@ def plot_energy_themes(energy_themes, output_dir=OUTPUT_DIR):
     print(f"Saved plot to {output_path}")
     plt.close()
 
-def plot_temporal_patterns(period_theme_counts, output_dir=OUTPUT_DIR):
+def plot_temporal_patterns(period_theme_counts, output_dir=None):
     """Plot theme patterns across different time periods"""
     if not period_theme_counts:
         print("No temporal data to plot")
         return
     
+    if output_dir is None:
+        output_dir = BASE_OUTPUT_DIR
     output_dir = ensure_output_dir(output_dir)
     
     # Create a DataFrame for easier plotting
@@ -530,8 +610,10 @@ def print_theme_statistics(theme_counter, category_counts, energy_themes):
     else:
         print("No energy-related themes found.")
 
-def save_results_to_csv(theme_counter, category_counts, energy_themes, period_theme_counts=None, output_dir=OUTPUT_DIR):
+def save_results_to_csv(theme_counter, category_counts, energy_themes, period_theme_counts=None, output_dir=None):
     """Save analysis results to CSV files"""
+    if output_dir is None:
+        output_dir = BASE_OUTPUT_DIR
     output_dir = ensure_output_dir(output_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -905,15 +987,14 @@ def main(input_file=INPUT_FILE):
     """Main execution function"""
     print(f"=== GDELT GKG Theme Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     
-    # IMPROVED: First verify all directories exist using config functions
+    # First verify all directories exist
     if not setup_and_verify():
         print("ERROR: Global directory setup verification failed. Aborting processing.")
         return
     
-    # IMPROVED: Test input directories
+    # Test input directories
     if not test_input_directories():
         print("WARNING: Some input directories or files are missing. Analysis may be incomplete.")
-        # Continue execution but with warning
     
     # Create organized directory structure
     output_dirs = create_organized_output_dirs()
@@ -924,34 +1005,44 @@ def main(input_file=INPUT_FILE):
         print("ERROR: Output directory tests failed. Cannot proceed with analysis.")
         return
     
-    # Determine data source
+    # Process data
+    theme_counter = None
+    category_counts = None
+    energy_themes = None
+    period_theme_counts = None
+    
+    # Define chunk size - adjust based on your available RAM
+    chunk_size = 50000
+    
+    # Determine data source and processing approach
     if PROCESS_BATCH_FILES:
-        print("Mode: Processing batch files")
-        df = load_batch_files(BATCH_DIR)
-        if df is not None:
-            # Ensure the directory exists - IMPROVED
-            os.makedirs(os.path.dirname(MERGED_OUTPUT_FILE), exist_ok=True)
-            # Optionally save the merged file
-            df.to_csv(MERGED_OUTPUT_FILE, index=False)
-            print(f"Saved merged data to {MERGED_OUTPUT_FILE}")
+        print("Mode: Processing batch files in chunks")
+        batch_files = load_batch_files_in_chunks(BATCH_DIR, chunk_size)
+        if batch_files:
+            # Process all files in chunks
+            theme_counter, category_counts, energy_themes, period_theme_counts = process_in_chunks(batch_files, chunk_size)
     elif USE_PREPROCESSED:
-        print("Mode: Using preprocessed data")
-        df = load_gkg_data(PREPROCESSED_FILE)
+        print("Mode: Using preprocessed data in chunks")
+        if os.path.exists(PREPROCESSED_FILE):
+            # Process the preprocessed file in chunks
+            theme_counter, category_counts, energy_themes, period_theme_counts = process_in_chunks([PREPROCESSED_FILE], chunk_size)
+        else:
+            print(f"Error: Preprocessed file {PREPROCESSED_FILE} does not exist")
+            return
     else:
-        print(f"Mode: Processing single file: {input_file}")
-        df = load_gkg_data(input_file)
-    
-    if df is None:
-        print("Error: No data to process")
-        return
-    
-    # Process the data
-    theme_counter, category_counts, energy_themes, period_theme_counts = process_file(df)
+        print(f"Mode: Processing single file in chunks: {input_file}")
+        if os.path.exists(input_file):
+            # Process the single file in chunks
+            theme_counter, category_counts, energy_themes, period_theme_counts = process_in_chunks([input_file], chunk_size)
+        else:
+            print(f"Error: Input file {input_file} does not exist")
+            return
     
     if theme_counter is None:
         print("Error: Theme extraction failed")
         return
     
+    # Rest of function remains the same (visualizations and reports)
     # Keep track of visualization paths for the report
     viz_paths = {}
     

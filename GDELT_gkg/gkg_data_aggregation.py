@@ -53,24 +53,17 @@ def validate_input_data(df, required_columns=None):
     
     return True
 
-def aggregate_gkg_to_15min(df):
-    """Aggregate GKG data into 15-minute intervals with improved error handling"""
-    print(f"Starting aggregation of {len(df)} records...")
-    
-    # Validate input data first
-    if not validate_input_data(df):
-        print("WARNING: Input data validation failed. Results may be incomplete.")
-    
+# Update the aggregate_chunk function to handle new features
+
+def aggregate_chunk(chunk):
+    """Aggregate a single chunk of data into 15-minute intervals"""
     # Ensure datetime is in the correct format
-    df['datetime'] = pd.to_datetime(df['datetime'])
+    chunk['datetime'] = pd.to_datetime(chunk['datetime'])
     
     # Create 15-minute time buckets
-    df['time_bucket'] = df['datetime'].dt.floor('15min')
+    chunk['time_bucket'] = chunk['datetime'].dt.floor('15min')
     
-    # 1. BASIC AGGREGATION
-    print("Performing basic aggregation...")
-    
-    # Define aggregation dictionary
+    # Define aggregation dictionary with enhanced features
     agg_dict = {
         'GKGRECORDID': 'count',
         **{f'theme_{cat}': ['sum', 'max', 'mean'] for cat in ENERGY_THEMES},
@@ -79,53 +72,161 @@ def aggregate_gkg_to_15min(df):
         'tone_positive': ['max', 'mean'],
         'tone_polarity': ['mean', 'max'],
         'tone_activity': ['mean', 'max'],
-        'entity_count': ['sum', 'mean'],
-        'entity_variety': ['sum', 'max'] if 'entity_variety' in df.columns else [],
-        'avg_amount': ['mean', 'max'] if 'avg_amount' in df.columns else [],
-        'max_amount': ['max', 'mean'] if 'max_amount' in df.columns else [],
-        'amount_count': ['sum'] if 'amount_count' in df.columns else []
+        
+        # Use entity data if available but don't rely on it (high missing rate)
+        'entity_count': ['sum', 'mean'] if 'entity_count' in chunk.columns else [],
+        'entity_variety': ['sum', 'max'] if 'entity_variety' in chunk.columns else [],
+        
+        # Amount fields have better coverage than counts (only ~20% missing)
+        'avg_amount': ['mean', 'max', 'sum'] if 'avg_amount' in chunk.columns else [],
+        'max_amount': ['max', 'mean'] if 'max_amount' in chunk.columns else [],
+        'amount_count': ['sum'] if 'amount_count' in chunk.columns else [],
+        
+        # Add the new impact score
+        'energy_impact_score': ['mean', 'max', 'sum'] if 'energy_impact_score' in chunk.columns else [],
+        
+        # Add energy context features
+        **{context: ['sum', 'max'] for context in [
+            'energy_supply', 'energy_demand', 'energy_price', 
+            'energy_policy', 'energy_infrastructure', 
+            'renewable_energy', 'fossil_fuel', 'weather_event'
+        ] if context in chunk.columns},
+        
+        # Include amount-theme interaction features
+        'energy_amount': ['sum', 'max'] if 'energy_amount' in chunk.columns else [],
+        'infrastructure_amount': ['sum', 'max'] if 'infrastructure_amount' in chunk.columns else [],
+        'environment_amount': ['sum', 'max'] if 'environment_amount' in chunk.columns else []
     }
     
     # Filter to only include columns that exist in the dataframe
-    agg_dict = {k: v for k, v in agg_dict.items() if isinstance(v, list) and k in df.columns}
+    agg_dict = {k: v for k, v in agg_dict.items() if isinstance(v, list) and k in chunk.columns}
     
     # Group by time bucket and aggregate
     try:
-        agg_df = df.groupby('time_bucket').agg(agg_dict)
+        agg_chunk = chunk.groupby('time_bucket').agg(agg_dict)
+        
+        # Flatten column multi-index
+        agg_chunk.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in agg_chunk.columns]
+        
+        # Ensure article_count exists, creating it if needed
+        if 'GKGRECORDID_count' in agg_chunk.columns:
+            agg_chunk.rename(columns={'GKGRECORDID_count': 'article_count'}, inplace=True)
+        elif 'article_count' not in agg_chunk.columns:
+            # Create article_count by counting rows directly
+            article_counts = chunk.groupby('time_bucket').size()
+            agg_chunk['article_count'] = article_counts
+        
+        return agg_chunk
     except Exception as e:
-        print(f"ERROR during aggregation: {e}")
+        print(f"ERROR during chunk aggregation: {e}")
         # Try with minimal set of columns
-        minimal_agg = {
-            'GKGRECORDID': 'count',
-            'tone_tone': ['mean'] if 'tone_tone' in df.columns else []
-        }
-        minimal_agg = {k: v for k, v in minimal_agg.items() if k in df.columns}
-        print("Retrying with minimal aggregation...")
-        agg_df = df.groupby('time_bucket').agg(minimal_agg)
+        try:
+            minimal_agg = {
+                'GKGRECORDID': 'count',
+                'tone_tone': ['mean'] if 'tone_tone' in chunk.columns else []
+            }
+            minimal_agg = {k: v for k, v in minimal_agg.items() if k in chunk.columns}
+            print("Retrying with minimal aggregation...")
+            agg_chunk = chunk.groupby('time_bucket').agg(minimal_agg)
+            agg_chunk.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in agg_chunk.columns]
+            
+            # Ensure article_count always exists
+            if 'GKGRECORDID_count' in agg_chunk.columns:
+                agg_chunk.rename(columns={'GKGRECORDID_count': 'article_count'}, inplace=True)
+            else:
+                # Create article_count by counting rows directly
+                article_counts = chunk.groupby('time_bucket').size()
+                agg_chunk['article_count'] = article_counts
+                
+            return agg_chunk
+        except Exception as e2:
+            print(f"ERROR: Minimal aggregation also failed: {e2}")
+            return None
+
+# Update the engineer_features function to improve feature creation
+def engineer_features(agg_df):
+    """Add engineered features to the aggregated dataframe"""
+    if agg_df is None or len(agg_df) == 0:
+        return agg_df
+        
+    # Reset index to make time_bucket a column
+    agg_df = agg_df.reset_index()
     
-    # Flatten column multi-index
-    agg_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in agg_df.columns]
+    # Ensure article_count exists
+    if 'article_count' not in agg_df.columns:
+        print("WARNING: article_count column not found, creating placeholder")
+        agg_df['article_count'] = 1
     
-    # Rename count column
-    agg_df.rename(columns={'GKGRECORDID_count': 'article_count'}, inplace=True)
-    
-    # 2. FEATURE ENGINEERING
-    print("Engineering features...")
-    
-    # FIXED: Calculate tone volatility BEFORE using it
+    # Calculate tone volatility
     agg_df['tone_volatility'] = agg_df['tone_tone_max'] - agg_df['tone_tone_min'] \
-                              if all(col in agg_df.columns for col in ['tone_tone_max', 'tone_tone_min']) \
-                              else 0
+                            if all(col in agg_df.columns for col in ['tone_tone_max', 'tone_tone_min']) \
+                            else 0
     
-    # Create composite features - with existence checks
+    # Enhanced energy-specific features using the new columns
+    
+    # 1. Create better energy crisis indicators using amount data
+    if all(col in agg_df.columns for col in ['theme_Energy_sum', 'avg_amount_sum']):
+        # Energy event magnitude (using more reliable amount data)
+        agg_df['energy_event_magnitude'] = (
+            agg_df['theme_Energy_sum'] * 
+            np.log1p(agg_df['avg_amount_sum'])
+        )
+    else:
+        # Fallback if amount data isn't available
+        agg_df['energy_event_magnitude'] = (
+            agg_df['theme_Energy_sum'] * 
+            agg_df['article_count']
+        )
+    
+    # 2. Use energy impact score if available
+    if 'energy_impact_score_sum' in agg_df.columns:
+        agg_df['energy_impact_index'] = agg_df['energy_impact_score_sum']
+    
+    # 3. Refined crisis indicators using energy contexts
+    energy_contexts = [
+        'energy_supply', 'energy_demand', 'energy_price', 
+        'energy_infrastructure', 'weather_event'
+    ]
+    
+    for context in energy_contexts:
+        sum_col = f'{context}_sum'
+        if sum_col in agg_df.columns:
+            # Create context-specific indicators
+            if context == 'energy_supply':
+                agg_df['supply_disruption_indicator'] = (
+                    agg_df[sum_col] * agg_df['tone_negative_max']
+                )
+            elif context == 'energy_demand':
+                agg_df['demand_spike_indicator'] = (
+                    agg_df[sum_col] * agg_df['article_count']
+                )
+            elif context == 'energy_price':
+                agg_df['price_volatility_indicator'] = (
+                    agg_df[sum_col] * agg_df['tone_volatility']
+                )
+            elif context == 'energy_infrastructure':
+                agg_df['infrastructure_failure_indicator'] = (
+                    agg_df[sum_col] * agg_df['tone_negative_max']
+                )
+            elif context == 'weather_event':
+                agg_df['weather_impact_indicator'] = (
+                    agg_df[sum_col] * agg_df['article_volume_spike']
+                    if 'article_volume_spike' in agg_df.columns else agg_df[sum_col]
+                )
+    
+    # Existing composite features with updates to handle missing columns better
     feature_definitions = [
         ('energy_crisis_indicator', 
          lambda df: df['theme_Energy_sum'] * df['tone_negative_max'] 
-         if all(col in df.columns for col in ['theme_Energy_sum', 'tone_negative_max']) else 0),
+         if all(col in df.columns for col in ['theme_Energy_sum', 'tone_negative_max']) else 
+         df['theme_Energy_sum'] * 0.5  # Fallback if tone data missing
+         if 'theme_Energy_sum' in df.columns else 0),
          
         ('weather_alert_indicator', 
          lambda df: df['theme_Environment_sum'] * np.abs(df['tone_tone_min'])
-         if all(col in df.columns for col in ['theme_Environment_sum', 'tone_tone_min']) else 0),
+         if all(col in df.columns for col in ['theme_Environment_sum', 'tone_tone_min']) else 
+         df['theme_Environment_sum'] * 0.5  # Fallback
+         if 'theme_Environment_sum' in df.columns else 0),
          
         ('social_event_indicator', 
          lambda df: df['theme_Social_sum'] * df['article_count'] / 100
@@ -152,51 +253,44 @@ def aggregate_gkg_to_15min(df):
             print(f"WARNING: Could not create feature {feature_name}: {e}")
             agg_df[feature_name] = 0
     
-    # Article volume change detection - with error handling
+    # Article volume changes
     try:
-        agg_df = agg_df.reset_index()
         agg_df['prev_article_count'] = agg_df['article_count'].shift(1).fillna(0)
         agg_df['article_count_change'] = agg_df['article_count'] - agg_df['prev_article_count']
         
-        # Use try/except for rolling window operations which can fail with short time series
+        # Use try/except for rolling window operations
         try:
             agg_df['article_volume_spike'] = (agg_df['article_count'] > 
-                                            agg_df['article_count'].rolling(window=12).mean() * 1.5).astype(int)
+                                          agg_df['article_count'].rolling(window=12).mean() * 1.5).astype(int)
         except Exception as e:
             print(f"WARNING: Could not calculate article_volume_spike: {e}")
             agg_df['article_volume_spike'] = 0
             
     except Exception as e:
         print(f"WARNING: Could not calculate article volume changes: {e}")
-        # Create default columns
-        agg_df = agg_df.reset_index()
         agg_df['article_count_change'] = 0
         agg_df['article_volume_spike'] = 0
     
-    # 3. TIME FEATURES
-    # --------------
-    print("Adding temporal features...")
-    
-    # Add temporal features
+    # Add time features
     agg_df['hour'] = agg_df['time_bucket'].dt.hour
     agg_df['day_of_week'] = agg_df['time_bucket'].dt.dayofweek
     agg_df['is_weekend'] = agg_df['day_of_week'].apply(lambda x: 1 if x >= 5 else 0)
     agg_df['is_business_hours'] = ((agg_df['hour'] >= 9) & (agg_df['hour'] <= 17) & 
-                                  (agg_df['is_weekend'] == 0)).astype(int)
+                                 (agg_df['is_weekend'] == 0)).astype(int)
     agg_df['month'] = agg_df['time_bucket'].dt.month
     agg_df['day'] = agg_df['time_bucket'].dt.day
     
-    # Add seasonality features using sine and cosine transforms
+    # Seasonality features
     agg_df['hour_sin'] = np.sin(2 * np.pi * agg_df['hour'] / 24)
     agg_df['hour_cos'] = np.cos(2 * np.pi * agg_df['hour'] / 24)
     agg_df['day_of_week_sin'] = np.sin(2 * np.pi * agg_df['day_of_week'] / 7)
     agg_df['day_of_week_cos'] = np.cos(2 * np.pi * agg_df['day_of_week'] / 7)
     
-    # 4. FEATURE CLEANUP AND SELECTION
-    # ------------------------------
-    print("Finalizing feature set...")
-    
-    # List of important features to keep (customize as needed)
+    return agg_df
+
+def select_features(df):
+    """Select and filter the most relevant features"""
+    # List of important features to keep
     keep_features = [
         'time_bucket', 'article_count', 'article_count_change', 'article_volume_spike',
         
@@ -225,7 +319,7 @@ def aggregate_gkg_to_15min(df):
     ]
     
     # Ensure all requested columns exist
-    available_columns = agg_df.columns.tolist()
+    available_columns = df.columns.tolist()
     final_columns = [col for col in keep_features if col in available_columns]
     
     if len(final_columns) < len(keep_features):
@@ -233,10 +327,7 @@ def aggregate_gkg_to_15min(df):
         print(f"Warning: Some columns were not found in the data: {missing}")
     
     # Keep only the most relevant features
-    final_df = agg_df[final_columns]
-    
-    print(f"Aggregation complete. Created {len(final_df)} time buckets with {len(final_columns)} features.")
-    return final_df
+    return df[final_columns]
 
 def handle_missing_intervals(df, start_date=None, end_date=None, freq='15min'):
     """
@@ -273,7 +364,6 @@ def handle_missing_intervals(df, start_date=None, end_date=None, freq='15min'):
     merged_df[sum_cols] = merged_df[sum_cols].fillna(0)
     
     # For means and other metrics, use forward fill then backward fill
-    # to maintain reasonable values
     other_numeric = merged_df.select_dtypes(include=[np.number]).columns.difference(sum_cols)
     merged_df[other_numeric] = merged_df[other_numeric].fillna(method='ffill')
     merged_df[other_numeric] = merged_df[other_numeric].fillna(method='bfill')
@@ -282,6 +372,242 @@ def handle_missing_intervals(df, start_date=None, end_date=None, freq='15min'):
     merged_df = merged_df.fillna(0)
     
     return merged_df
+
+def save_feature_documentation(df, output_dir):
+    """Save feature statistics and documentation"""
+    stats_file = os.path.join(output_dir, "feature_statistics.csv")
+    
+    # Calculate basic statistics
+    feature_stats = pd.DataFrame({
+        'mean': df.mean(),
+        'min': df.min(),
+        'max': df.max(),
+        'std': df.std(),
+        'missing': df.isnull().sum()
+    })
+    
+    # Save to CSV
+    feature_stats.to_csv(stats_file, encoding='utf-8')
+    print(f"Feature statistics saved to {stats_file}")
+
+def process_file_in_chunks(input_path, output_path, chunk_size=50000, start_date=None, end_date=None):
+    """Process a large file in chunks with minimal memory usage"""
+    print(f"Processing file {input_path} in chunks of {chunk_size} rows...")
+    
+    # Dictionary to store aggregated results by time bucket
+    aggregated_data = {}
+    
+    # Read and process the file in chunks
+    chunks_processed = 0
+    total_rows = 0
+    
+    try:
+        # Initialize the reader - this doesn't load the whole file at once
+        for chunk in pd.read_csv(input_path, chunksize=chunk_size, encoding='utf-8', encoding_errors='replace'):
+            chunks_processed += 1
+            total_rows += len(chunk)
+            print(f"Processing chunk {chunks_processed} ({len(chunk)} rows)...")
+            
+            # Validate data in chunk
+            if not validate_input_data(chunk):
+                print(f"WARNING: Chunk {chunks_processed} has invalid data structure. Skipping.")
+                continue
+            
+            # Aggregate this chunk
+            chunk_agg = aggregate_chunk(chunk)
+            
+            if chunk_agg is None or len(chunk_agg) == 0:
+                print(f"WARNING: Chunk {chunks_processed} produced no aggregated data. Skipping.")
+                continue
+            
+            # Add to our aggregated data dictionary
+            for idx, row in chunk_agg.iterrows():
+                time_bucket = idx  # The index is the time_bucket
+                
+                if time_bucket in aggregated_data:
+                    # Merge with existing data for this time bucket
+                    for col in chunk_agg.columns:
+                        # For count/sum metrics, add values
+                        if col.endswith('_sum') or col == 'article_count':
+                            aggregated_data[time_bucket][col] = aggregated_data[time_bucket].get(col, 0) + row[col]
+                        # For max metrics, take the maximum
+                        elif col.endswith('_max'):
+                            aggregated_data[time_bucket][col] = max(aggregated_data[time_bucket].get(col, -np.inf), row[col])
+                        # For mean metrics, we'll need to recalculate later
+                        elif col.endswith('_mean'):
+                            # Store sum and count for later mean calculation
+                            sum_col = f"{col}_sum"
+                            count_col = f"{col}_count"
+                            aggregated_data[time_bucket][sum_col] = aggregated_data[time_bucket].get(sum_col, 0) + row[col]
+                            aggregated_data[time_bucket][count_col] = aggregated_data[time_bucket].get(count_col, 0) + 1
+                        # For min metrics, take the minimum
+                        elif col.endswith('_min'):
+                            aggregated_data[time_bucket][col] = min(aggregated_data[time_bucket].get(col, np.inf), row[col])
+                        # For std metrics, we will need raw data which we don't have, so skip
+                else:
+                    # New time bucket
+                    aggregated_data[time_bucket] = row.to_dict()
+                    # Initialize count for mean metrics
+                    for col in row.index:
+                        if col.endswith('_mean'):
+                            aggregated_data[time_bucket][f"{col}_count"] = 1
+                            aggregated_data[time_bucket][f"{col}_sum"] = row[col]
+            
+            # Clear memory
+            del chunk
+            del chunk_agg
+            
+    except Exception as e:
+        print(f"Error processing chunks: {e}")
+        # Try with latin-1 encoding if UTF-8 failed
+        if 'UTF-8' in str(e) or 'encoding' in str(e).lower():
+            print("Retrying with latin-1 encoding...")
+            return process_file_in_chunks_latin1(input_path, output_path, chunk_size, start_date, end_date)
+    
+    print(f"Processed {chunks_processed} chunks with {total_rows} total rows")
+    print(f"Found {len(aggregated_data)} unique time buckets")
+    
+    # Convert aggregated data to DataFrame
+    agg_df = pd.DataFrame.from_dict(aggregated_data, orient='index')
+    agg_df.index.name = 'time_bucket'
+    
+    # Recalculate mean values
+    for col in list(agg_df.columns):
+        if col.endswith('_mean'):
+            sum_col = f"{col}_sum"
+            count_col = f"{col}_count"
+            if sum_col in agg_df.columns and count_col in agg_df.columns:
+                agg_df[col] = agg_df[sum_col] / agg_df[count_col]
+                # Drop temporary columns
+                agg_df.drop([sum_col, count_col], axis=1, inplace=True)
+    
+    # Engineer features
+    print("Engineering features...")
+    agg_df = engineer_features(agg_df)
+    
+    # Select only needed features
+    print("Selecting relevant features...")
+    final_df = select_features(agg_df)
+    
+    # Handle missing intervals
+    print("Handling missing intervals...")
+    complete_df = handle_missing_intervals(final_df, start_date, end_date)
+    
+    # Save to file
+    print(f"Saving to {output_path}...")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    complete_df.to_csv(output_path, index=False, encoding='utf-8')
+    
+    print(f"Saved {len(complete_df)} rows with {complete_df.shape[1]} columns")
+    
+    return complete_df
+
+def process_file_in_chunks_latin1(input_path, output_path, chunk_size=50000, start_date=None, end_date=None):
+    """Process a large file in chunks with latin-1 encoding (fallback)"""
+    # Same as process_file_in_chunks but with latin-1 encoding
+    # I'll provide the implementation with latin-1 encoding
+    try:
+        chunks_processed = 0
+        total_rows = 0
+        aggregated_data = {}
+        
+        for chunk in pd.read_csv(input_path, chunksize=chunk_size, encoding='latin-1'):
+            # Same processing as in the main function
+            chunks_processed += 1
+            total_rows += len(chunk)
+            print(f"Processing chunk {chunks_processed} ({len(chunk)} rows) with latin-1 encoding...")
+            
+            # Validate data in chunk
+            if not validate_input_data(chunk):
+                print(f"WARNING: Chunk {chunks_processed} has invalid data structure. Skipping.")
+                continue
+            
+            # Aggregate this chunk
+            chunk_agg = aggregate_chunk(chunk)
+            
+            if chunk_agg is None or len(chunk_agg) == 0:
+                print(f"WARNING: Chunk {chunks_processed} produced no aggregated data. Skipping.")
+                continue
+            
+            # Add to our aggregated data dictionary
+            for idx, row in chunk_agg.iterrows():
+                time_bucket = idx  # The index is the time_bucket
+                
+                if time_bucket in aggregated_data:
+                    # Merge with existing data for this time bucket
+                    for col in chunk_agg.columns:
+                        # For count/sum metrics, add values
+                        if col.endswith('_sum') or col == 'article_count':
+                            aggregated_data[time_bucket][col] = aggregated_data[time_bucket].get(col, 0) + row[col]
+                        # For max metrics, take the maximum
+                        elif col.endswith('_max'):
+                            aggregated_data[time_bucket][col] = max(aggregated_data[time_bucket].get(col, -np.inf), row[col])
+                        # For mean metrics, we'll need to recalculate later
+                        elif col.endswith('_mean'):
+                            # Store sum and count for later mean calculation
+                            sum_col = f"{col}_sum"
+                            count_col = f"{col}_count"
+                            aggregated_data[time_bucket][sum_col] = aggregated_data[time_bucket].get(sum_col, 0) + row[col]
+                            aggregated_data[time_bucket][count_col] = aggregated_data[time_bucket].get(count_col, 0) + 1
+                        # For min metrics, take the minimum
+                        elif col.endswith('_min'):
+                            aggregated_data[time_bucket][col] = min(aggregated_data[time_bucket].get(col, np.inf), row[col])
+                        # For std metrics, we will need raw data which we don't have, so skip
+                else:
+                    # New time bucket
+                    aggregated_data[time_bucket] = row.to_dict()
+                    # Initialize count for mean metrics
+                    for col in row.index:
+                        if col.endswith('_mean'):
+                            aggregated_data[time_bucket][f"{col}_count"] = 1
+                            aggregated_data[time_bucket][f"{col}_sum"] = row[col]
+            
+            # Clear memory
+            del chunk
+            del chunk_agg
+            
+        # Continue with the same processing as in the main function
+        print(f"Processed {chunks_processed} chunks with {total_rows} total rows")
+        print(f"Found {len(aggregated_data)} unique time buckets")
+        
+        # Convert aggregated data to DataFrame
+        agg_df = pd.DataFrame.from_dict(aggregated_data, orient='index')
+        agg_df.index.name = 'time_bucket'
+        
+        # Recalculate mean values
+        for col in list(agg_df.columns):
+            if col.endswith('_mean'):
+                sum_col = f"{col}_sum"
+                count_col = f"{col}_count"
+                if sum_col in agg_df.columns and count_col in agg_df.columns:
+                    agg_df[col] = agg_df[sum_col] / agg_df[count_col]
+                    # Drop temporary columns
+                    agg_df.drop([sum_col, count_col], axis=1, inplace=True)
+        
+        # Engineer features
+        print("Engineering features...")
+        agg_df = engineer_features(agg_df)
+        
+        # Select only needed features
+        print("Selecting relevant features...")
+        final_df = select_features(agg_df)
+        
+        # Handle missing intervals
+        print("Handling missing intervals...")
+        complete_df = handle_missing_intervals(final_df, start_date, end_date)
+        
+        # Save to file
+        print(f"Saving to {output_path}...")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        complete_df.to_csv(output_path, index=False, encoding='utf-8')
+        
+        print(f"Saved {len(complete_df)} rows with {complete_df.shape[1]} columns")
+        
+        return complete_df
+        
+    except Exception as e:
+        print(f"Fatal error during latin-1 processing: {e}")
+        return None
 
 def analyze_features(df):
     """
@@ -333,18 +659,33 @@ def generate_time_series_plots(df):
     """Generate exploratory time series plots of key features"""
     print("Generating time series visualizations...")
     
+    # Ensure required columns exist
+    required_cols = ['time_bucket', 'article_count', 'article_volume_spike']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"WARNING: Cannot generate all plots. Missing columns: {missing_cols}")
+        # Create dummy columns for missing data
+        for col in missing_cols:
+            if col == 'article_count':
+                df[col] = 1  # Default value
+            elif col == 'article_volume_spike':
+                df[col] = 0  # Default value
+    
     # Select a subset of data points for clarity if dataset is large
     plot_df = df
     if len(df) > 1000:
         # Sample at 1-hour intervals for cleaner plots
         plot_df = df.iloc[::4]  
     
-    # 1. Article volume and spikes
+    # 1. Article volume and spikes - with column existence checks
     plt.figure(figsize=(15, 8))
     plt.plot(plot_df['time_bucket'], plot_df['article_count'], label='Article Count')
-    plt.scatter(plot_df['time_bucket'][plot_df['article_volume_spike'] == 1], 
-                plot_df['article_count'][plot_df['article_volume_spike'] == 1],
-                color='red', alpha=0.6, label='Volume Spikes')
+    
+    if 'article_volume_spike' in plot_df.columns:
+        plt.scatter(plot_df['time_bucket'][plot_df['article_volume_spike'] == 1], 
+                    plot_df['article_count'][plot_df['article_volume_spike'] == 1],
+                    color='red', alpha=0.6, label='Volume Spikes')
+    
     plt.title('Article Volume Over Time with Detected Spikes', fontsize=16)
     plt.xlabel('Date', fontsize=12)
     plt.ylabel('Article Count', fontsize=12)
@@ -353,6 +694,8 @@ def generate_time_series_plots(df):
     plt.tight_layout()
     plt.savefig(os.path.join(FIGURES_DIR, 'article_volume_spikes.png'), dpi=300)
     plt.close()
+    
+    # Continue with other visualization code, adding similar checks
     
     # 2. Theme presence over time
     plt.figure(figsize=(15, 10))
@@ -489,7 +832,7 @@ def test_directory_writing():
     return all_passed
 
 def main():
-    """Main function with better error handling and recovery"""
+    """Main function with memory-efficient processing"""
     print(f"=== GDELT GKG Data Aggregation - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     
     # Command line argument parsing
@@ -500,63 +843,30 @@ def main():
     parser.add_argument("--no-plots", action="store_true", help="Skip generating plots")
     parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--chunk-size", type=int, default=50000, help="Chunk size for processing")
     args = parser.parse_args()
     
     # Override paths if specified
     input_path = args.input or INPUT_PATH
     output_path = args.output or OUTPUT_PATH
+    chunk_size = args.chunk_size
     
     # Directory checks
     if not setup_and_verify() or not test_directory_writing():
         print("ERROR: Directory checks failed. Aborting processing.")
         return
     
-    # Load data with encoding handling
-    print(f"Loading data from {input_path}...")
-    try:
-        # Try utf-8 with error replacement
-        df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
-    except Exception as e:
-        print(f"Error with utf-8 encoding, trying latin-1: {e}")
-        try:
-            # Fall back to latin-1
-            df = pd.read_csv(input_path, encoding='latin-1')
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            return
-    
-    # Process in chunks if it's a large file
-    if len(df) > 1000000:  # For very large files
-        print("Large dataset detected, processing in chunks...")
-        chunk_size = 500000
-        chunks = [df[i:i+chunk_size] for i in range(0, len(df), chunk_size)]
-        
-        results = []
-        for i, chunk in enumerate(chunks):
-            print(f"Processing chunk {i+1}/{len(chunks)}...")
-            chunk_agg = aggregate_gkg_to_15min(chunk)
-            if chunk_agg is not None:
-                results.append(chunk_agg)
-        
-        if not results:
-            print("All chunks failed processing. Aborting.")
-            return
-            
-        # Combine chunks and handle duplicates
-        agg_df = pd.concat(results)
-        agg_df = agg_df.groupby('time_bucket').first().reset_index()
-    else:
-        # Standard processing for smaller files
-        agg_df = aggregate_gkg_to_15min(df)
-        
-        if agg_df is None:
-            print("Aggregation failed. Check the logs for errors.")
-            return
-    
-    # Handle missing intervals
+    # Parse date parameters if provided
     start_date = pd.to_datetime(args.start_date) if args.start_date else None
     end_date = pd.to_datetime(args.end_date) if args.end_date else None
-    complete_df = handle_missing_intervals(agg_df, start_date=start_date, end_date=end_date)
+    
+    # Process the file in chunks
+    print(f"Starting memory-efficient processing with chunk size: {chunk_size}")
+    complete_df = process_file_in_chunks(input_path, output_path, chunk_size, start_date, end_date)
+    
+    if complete_df is None:
+        print("Processing failed. See errors above.")
+        return
     
     # Only generate visualizations if not disabled
     if not args.no_plots:
@@ -566,10 +876,8 @@ def main():
         # Generate exploratory visualizations
         generate_time_series_plots(complete_df)
     
-    # Save the aggregated data
-    print(f"Saving aggregated data to {output_path}...")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    complete_df.to_csv(output_path, index=False)
+    # Save feature documentation
+    save_feature_documentation(complete_df, os.path.dirname(output_path))
     
     # Print success message
     print(f"Data aggregation complete. Created {len(complete_df)} 15-minute intervals with {complete_df.shape[1]} features.")

@@ -1,6 +1,32 @@
 # Ignore output directories
 OUTPUT_DIR/
 
+# Ignore only specific data directories but keep the directory structure
+OUTPUT_DIR/raw_data/**/*
+OUTPUT_DIR/processed_data/**/*
+# Keep the directory structure by including empty directories
+!OUTPUT_DIR/raw_data/
+!OUTPUT_DIR/raw_data/*/
+!OUTPUT_DIR/processed_data/
+!OUTPUT_DIR/processed_data/*/
+
+# Ignore specific data directories that contain large files
+# Raw data directories
+/OUTPUT_DIR/raw_data/batch_outputs/*
+/OUTPUT_DIR/raw_data/cache/*
+
+# Processed data directories with large files
+/OUTPUT_DIR/processed_data/*
+
+# Specific large files to ignore
+/OUTPUT_DIR/processed_data/processed_gkg_parsed_data.csv
+/OUTPUT_DIR/raw_data/batch_outputs/**
+
+# Keep directory structure by including .gitkeep files
+!/**/.gitkeep
+!/OUTPUT_DIR/raw_data/batch_outputs/.gitkeep
+!/OUTPUT_DIR/processed_data/.gitkeep
+
 # Ignore Python cache files
 __pycache__/
 *.pyc
@@ -39,16 +65,19 @@ Thumbs.db
 *.out
 *.class
 
-# Ignore large data files (if applicable)
-*.csv
+# Ignore large binary/data files
 *.tsv
-*.json
-*.xml
 *.zip
 *.tar
 *.gz
 *.pickle
 *.pkl
 
-# Allow specific files in OUTPUT_DIR if needed
-!OUTPUT_DIR/important_file.csv
+# Allow everything else in OUTPUT_DIR
+!OUTPUT_DIR/
+!OUTPUT_DIR/*/
+!OUTPUT_DIR/**/*.json
+!OUTPUT_DIR/**/*.csv
+
+# But allow all other files in OUTPUT_DIR
+# (The rules above only ignore specific files/directories)

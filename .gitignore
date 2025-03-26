@@ -73,11 +73,44 @@ Thumbs.db
 *.pickle
 *.pkl
 
-# Allow everything else in OUTPUT_DIR
-!OUTPUT_DIR/
-!OUTPUT_DIR/*/
-!OUTPUT_DIR/**/*.json
-!OUTPUT_DIR/**/*.csv
+# Allow specific files in OUTPUT_DIR if needed
+!OUTPUT_DIR/important_file.csv
 
-# But allow all other files in OUTPUT_DIR
-# (The rules above only ignore specific files/directories)
+# Only ignore these specific paths in OUTPUT_DIR:
+
+# 1. Ignore this specific large file
+/OUTPUT_DIR/processed_data/processed_gkg_parsed_data.csv
+
+# 2. Ignore the batch_outputs directory
+/OUTPUT_DIR/raw_data/batch_outputs/
+/OUTPUT_DIR/raw_data/batch_outputs/**
+
+# Keep directory structure with .gitkeep files
+!/OUTPUT_DIR/raw_data/batch_outputs/.gitkeep
+
+# Standard programming ignores
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dll
+*.exe
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db

@@ -44,6 +44,17 @@ DIRECTORIES = {
     # Visualizations
     "figures": {
         "": "Generated charts, graphs, and other visualizations"
+    },
+    
+    # New directories for model training
+    "split_data": {
+        "": "Train/test data splits for model training"
+    },
+    "models": {
+        "": "Trained models, scalers, and model checkpoints"
+    },
+    "model_evaluation": {
+        "": "Model evaluation results, metrics, and performance visualizations"
     }
 }
 
@@ -57,7 +68,11 @@ PATHS = {
     "PROCESSED_DIR": os.path.join(OUTPUT_DIR, "processed_data"),
     "AGGREGATED_DIR": os.path.join(OUTPUT_DIR, "aggregated_data"),
     "ANALYSIS_DIR": os.path.join(OUTPUT_DIR, "analysis_results"),
-    "FIGURES_DIR": os.path.join(OUTPUT_DIR, "figures")
+    "FIGURES_DIR": os.path.join(OUTPUT_DIR, "figures"),
+    # New paths for model training
+    "SPLIT_DATA_DIR": os.path.join(OUTPUT_DIR, "split_data"),
+    "MODELS_DIR": os.path.join(OUTPUT_DIR, "models"),
+    "MODEL_EVAL_DIR": os.path.join(OUTPUT_DIR, "model_evaluation")
 }
 
 # Specific file paths
